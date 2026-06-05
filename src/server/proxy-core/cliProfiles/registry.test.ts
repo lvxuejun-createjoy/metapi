@@ -164,6 +164,100 @@ describe('detectCliProfile', () => {
     });
   });
 
+  it('uses x-claude-code-session-id as the Claude Code sticky session fallback', () => {
+    expect(detectCliProfile({
+      downstreamPath: '/v1/messages',
+      headers: {
+        'user-agent': 'claude-cli/2.1.63 (external, cli)',
+        'anthropic-beta': 'claude-code-20250219,oauth-2025-04-20',
+        'anthropic-version': '2023-06-01',
+        'x-app': 'cli',
+        'x-claude-code-session-id': 'af669d36-f9a5-4bb4-82e5-1830e90d3706',
+      },
+      body: {
+        model: 'claude-sonnet-4-5',
+      },
+    })).toEqual({
+      id: 'claude_code',
+      sessionId: 'af669d36-f9a5-4bb4-82e5-1830e90d3706',
+      traceHint: 'af669d36-f9a5-4bb4-82e5-1830e90d3706',
+      clientAppId: 'claude_code',
+      clientAppName: 'Claude Code',
+      clientConfidence: 'exact',
+      capabilities: {
+        supportsResponsesCompact: false,
+        supportsResponsesWebsocketIncremental: false,
+        preservesContinuation: true,
+        supportsCountTokens: true,
+        echoesTurnState: false,
+      },
+    });
+  });
+
+  it('falls back to session and conversation headers for Claude Code sticky sessions', () => {
+    expect(detectCliProfile({
+      downstreamPath: '/v1/messages',
+      headers: {
+        'user-agent': 'claude-cli/2.1.63 (external, cli)',
+        'anthropic-beta': 'claude-code-20250219,oauth-2025-04-20',
+        'anthropic-version': '2023-06-01',
+        'x-app': 'cli',
+        'conversation-id': 'claude-conversation-123',
+      },
+      body: {
+        model: 'claude-sonnet-4-5',
+      },
+    })).toEqual({
+      id: 'claude_code',
+      sessionId: 'claude-conversation-123',
+      traceHint: 'claude-conversation-123',
+      clientAppId: 'claude_code',
+      clientAppName: 'Claude Code',
+      clientConfidence: 'exact',
+      capabilities: {
+        supportsResponsesCompact: false,
+        supportsResponsesWebsocketIncremental: false,
+        preservesContinuation: true,
+        supportsCountTokens: true,
+        echoesTurnState: false,
+      },
+    });
+  });
+
+  it('prefers metadata.user_id over Claude Code session headers', () => {
+    expect(detectCliProfile({
+      downstreamPath: '/v1/messages',
+      headers: {
+        'user-agent': 'claude-cli/2.1.63 (external, cli)',
+        'anthropic-beta': 'claude-code-20250219,oauth-2025-04-20',
+        'anthropic-version': '2023-06-01',
+        'x-app': 'cli',
+        'x-claude-code-session-id': 'af669d36-f9a5-4bb4-82e5-1830e90d3706',
+        'session-id': 'fallback-session-999',
+      },
+      body: {
+        model: 'claude-sonnet-4-5',
+        metadata: {
+          user_id: 'user_20836b5653ed68aa981604f502c0a491397f6053826a93c953423632578d38ad_account__session_f25958b8-e75c-455d-8b40-f006d87cc2a4',
+        },
+      },
+    })).toEqual({
+      id: 'claude_code',
+      sessionId: 'f25958b8-e75c-455d-8b40-f006d87cc2a4',
+      traceHint: 'f25958b8-e75c-455d-8b40-f006d87cc2a4',
+      clientAppId: 'claude_code',
+      clientAppName: 'Claude Code',
+      clientConfidence: 'exact',
+      capabilities: {
+        supportsResponsesCompact: false,
+        supportsResponsesWebsocketIncremental: false,
+        preservesContinuation: true,
+        supportsCountTokens: true,
+        echoesTurnState: false,
+      },
+    });
+  });
+
   it('detects Gemini CLI internal routes and exposes Gemini CLI capability flags', () => {
     expect(detectCliProfile({
       downstreamPath: '/v1internal:countTokens',

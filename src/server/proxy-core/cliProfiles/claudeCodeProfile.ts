@@ -53,6 +53,30 @@ export function extractClaudeCodeSessionId(userId: string): string | null {
   return sessionId || null;
 }
 
+function getClaudeCodeSessionId(input: {
+  headers?: Record<string, unknown>;
+  body?: unknown;
+}): string | null {
+  const userId = isRecord(input.body) && isRecord(input.body.metadata) && typeof input.body.metadata.user_id === 'string'
+    ? input.body.metadata.user_id.trim()
+    : '';
+  const sessionIdFromUserId = userId ? extractClaudeCodeSessionId(userId) : null;
+  if (sessionIdFromUserId) return sessionIdFromUserId;
+
+  for (const headerName of [
+    'x-claude-code-session-id',
+    'session_id',
+    'session-id',
+    'conversation_id',
+    'conversation-id',
+  ]) {
+    const headerValue = getHeaderValue(input.headers, headerName);
+    if (headerValue) return headerValue;
+  }
+
+  return null;
+}
+
 export const claudeCodeCliProfile: CliProfileDefinition = {
   id: 'claude_code',
   capabilities: {
@@ -64,10 +88,7 @@ export const claudeCodeCliProfile: CliProfileDefinition = {
   },
   detect(input) {
     if (!isClaudeSurface(input.downstreamPath)) return null;
-    const userId = isRecord(input.body) && isRecord(input.body.metadata) && typeof input.body.metadata.user_id === 'string'
-      ? input.body.metadata.user_id.trim()
-      : '';
-    const sessionId = userId ? extractClaudeCodeSessionId(userId) : null;
+    const sessionId = getClaudeCodeSessionId(input);
     if (!sessionId && !hasClaudeCodeHeaderFingerprint(input.headers)) return null;
 
     return {
