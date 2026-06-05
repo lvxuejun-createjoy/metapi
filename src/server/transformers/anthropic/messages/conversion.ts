@@ -80,7 +80,8 @@ function sanitizeAnthropicOutputConfig(
     } else if (!allowEffort) {
       // Ignore effort outside adaptive thinking; upstream only applies it there.
     } else if (!VALID_ANTHROPIC_EFFORTS.has(effort)) {
-      return { error: 'output_config.effort must be one of: low, medium, high, max' };
+            next.effort = effort;
+//return { error: 'output_config.effort must be one of: low, medium, high, max' };
     } else {
       next.effort = effort;
     }

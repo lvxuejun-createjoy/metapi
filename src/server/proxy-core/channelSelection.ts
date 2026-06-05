@@ -3,11 +3,28 @@ import { proxyChannelCoordinator } from '../services/proxyChannelCoordinator.js'
 import { canRetryProxyChannel } from '../services/proxyChannelRetry.js';
 import type { DownstreamRoutingPolicy } from '../services/downstreamPolicyTypes.js';
 import { tokenRouter } from '../services/tokenRouter.js';
+import { config } from '../config.js';
 
 type SelectedChannel = Awaited<ReturnType<typeof tokenRouter.selectChannel>>;
 
 export const TESTER_FORCED_CHANNEL_HEADER = 'x-metapi-tester-forced-channel-id';
 export const TESTER_REQUEST_HEADER = 'x-metapi-tester-request';
+
+function shouldLogStickyDiagnostics(): boolean {
+  return config.proxyDebugTraceEnabled === true;
+}
+
+function summarizeStickySessionKey(stickySessionKey?: string | null): string {
+  const normalized = String(stickySessionKey || '').trim();
+  if (!normalized) return '';
+  if (normalized.length <= 80) return normalized;
+  return `${normalized.slice(0, 32)}...${normalized.slice(-16)}`;
+}
+
+function logStickyDiagnostics(event: string, details: Record<string, unknown>): void {
+  if (!shouldLogStickyDiagnostics()) return;
+  console.info(`[proxy/sticky] ${event}`, details);
+}
 
 function headerValueEquals(
   headers: Record<string, unknown> | undefined,
@@ -92,6 +109,12 @@ export async function selectProxyChannelForAttempt(input: {
   const normalizedForcedChannelId = normalizeForcedChannelId(input.forcedChannelId);
   if (normalizedForcedChannelId !== null) {
     if (input.retryCount > 0) return null;
+    logStickyDiagnostics('forced-select-attempt', {
+      requestedModel: input.requestedModel,
+      retryCount: input.retryCount,
+      forcedChannelId: normalizedForcedChannelId,
+      excludeChannelIds: input.excludeChannelIds,
+    });
     return await tokenRouter.selectPreferredChannel(
       input.requestedModel,
       normalizedForcedChannelId,
@@ -118,6 +141,13 @@ export async function selectProxyChannelForAttempt(input: {
   if (input.retryCount === 0 && input.stickySessionKey) {
     const preferredChannelId = proxyChannelCoordinator.getStickyChannelId(input.stickySessionKey);
     if (preferredChannelId && !input.excludeChannelIds.includes(preferredChannelId)) {
+      logStickyDiagnostics('sticky-select-attempt', {
+        requestedModel: input.requestedModel,
+        retryCount: input.retryCount,
+        stickySessionKey: summarizeStickySessionKey(input.stickySessionKey),
+        preferredChannelId,
+        excludeChannelIds: input.excludeChannelIds,
+      });
       selected = await tokenRouter.selectPreferredChannel(
         input.requestedModel,
         preferredChannelId,
@@ -126,6 +156,12 @@ export async function selectProxyChannelForAttempt(input: {
       );
       if (!selected) {
         const refreshSucceeded = await refreshRoutesForFirstAttempt();
+        logStickyDiagnostics('sticky-select-refresh', {
+          requestedModel: input.requestedModel,
+          stickySessionKey: summarizeStickySessionKey(input.stickySessionKey),
+          preferredChannelId,
+          refreshSucceeded,
+        });
         selected = await tokenRouter.selectPreferredChannel(
           input.requestedModel,
           preferredChannelId,
@@ -134,6 +170,11 @@ export async function selectProxyChannelForAttempt(input: {
         );
         if (!selected && refreshSucceeded) {
           proxyChannelCoordinator.clearStickyChannel(input.stickySessionKey, preferredChannelId);
+          logStickyDiagnostics('sticky-select-cleared-after-refresh', {
+            requestedModel: input.requestedModel,
+            stickySessionKey: summarizeStickySessionKey(input.stickySessionKey),
+            preferredChannelId,
+          });
         }
       }
     }
@@ -153,6 +194,16 @@ export async function selectProxyChannelForAttempt(input: {
     await refreshRoutesForFirstAttempt();
     selected = await tokenRouter.selectChannel(input.requestedModel, input.downstreamPolicy);
   }
+
+  logStickyDiagnostics('selection-result', {
+    requestedModel: input.requestedModel,
+    retryCount: input.retryCount,
+    stickySessionKey: summarizeStickySessionKey(input.stickySessionKey),
+    forcedChannelId: normalizedForcedChannelId,
+    excludeChannelIds: input.excludeChannelIds,
+    selectedChannelId: selected?.channel?.id ?? null,
+    selectedRouteId: selected?.channel?.routeId ?? null,
+  });
 
   return selected;
 }

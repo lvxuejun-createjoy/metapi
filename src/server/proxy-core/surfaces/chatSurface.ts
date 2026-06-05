@@ -120,6 +120,42 @@ function finalizeRetryAsExecutionFailure(message: string) {
   };
 }
 
+function summarizeStickySessionKey(stickySessionKey?: string | null): string | null {
+  const normalized = String(stickySessionKey || '').trim();
+  if (!normalized) return null;
+  if (normalized.length <= 120) return normalized;
+  return `${normalized.slice(0, 48)}...${normalized.slice(-24)}`;
+}
+
+function logStickySelectionSummary(input: {
+  downstreamPath: string;
+  clientKind?: string | null;
+  sessionId?: string | null;
+  requestedModel: string;
+  retryCount: number;
+  stickySessionKey?: string | null;
+  stickyPreferredChannelId?: number | null;
+  stickyHitChannelId?: number | null;
+  selectedChannelId?: number | null;
+  selectedRouteId?: number | null;
+  excludeChannelIds: number[];
+}): void {
+  if (config.proxyDebugTraceEnabled !== true) return;
+  console.info('[proxy/sticky] selection-summary', {
+    downstreamPath: input.downstreamPath,
+    clientKind: input.clientKind || null,
+    sessionId: input.sessionId || null,
+    requestedModel: input.requestedModel,
+    retryCount: input.retryCount,
+    stickySessionKey: summarizeStickySessionKey(input.stickySessionKey),
+    stickyPreferredChannelId: input.stickyPreferredChannelId ?? null,
+    stickyHitChannelId: input.stickyHitChannelId ?? null,
+    selectedChannelId: input.selectedChannelId ?? null,
+    selectedRouteId: input.selectedRouteId ?? null,
+    excludeChannelIds: input.excludeChannelIds,
+  });
+}
+
 export async function handleChatSurfaceRequest(
   request: FastifyRequest,
   reply: FastifyReply,
@@ -265,13 +301,27 @@ export async function handleChatSurfaceRequest(
     }
 
     excludeChannelIds.push(selected.channel.id);
+    const stickyHitChannelId = (
+      stickyPreferredChannelId && stickyPreferredChannelId === selected.channel.id
+        ? stickyPreferredChannelId
+        : null
+    );
+    logStickySelectionSummary({
+      downstreamPath,
+      clientKind: clientContext.clientKind,
+      sessionId: clientContext.sessionId || null,
+      requestedModel,
+      retryCount,
+      stickySessionKey,
+      stickyPreferredChannelId,
+      stickyHitChannelId,
+      selectedChannelId: selected.channel.id,
+      selectedRouteId: selected.channel.routeId ?? null,
+      excludeChannelIds,
+    });
     await safeUpdateSurfaceProxyDebugSelection(debugTrace, {
       stickySessionKey,
-      stickyHitChannelId: (
-        stickyPreferredChannelId && stickyPreferredChannelId === selected.channel.id
-          ? stickyPreferredChannelId
-          : null
-      ),
+      stickyHitChannelId,
       selectedChannelId: selected.channel.id,
       selectedRouteId: selected.channel.routeId ?? null,
       selectedAccountId: selected.account.id,
@@ -1206,13 +1256,27 @@ export async function handleClaudeCountTokensSurfaceRequest(
     }
 
     excludeChannelIds.push(selected.channel.id);
+    const stickyHitChannelId = (
+      stickyPreferredChannelId && stickyPreferredChannelId === selected.channel.id
+        ? stickyPreferredChannelId
+        : null
+    );
+    logStickySelectionSummary({
+      downstreamPath,
+      clientKind: clientContext.clientKind,
+      sessionId: clientContext.sessionId || null,
+      requestedModel,
+      retryCount,
+      stickySessionKey,
+      stickyPreferredChannelId,
+      stickyHitChannelId,
+      selectedChannelId: selected.channel.id,
+      selectedRouteId: selected.channel.routeId ?? null,
+      excludeChannelIds,
+    });
     await safeUpdateSurfaceProxyDebugSelection(debugTrace, {
       stickySessionKey,
-      stickyHitChannelId: (
-        stickyPreferredChannelId && stickyPreferredChannelId === selected.channel.id
-          ? stickyPreferredChannelId
-          : null
-      ),
+      stickyHitChannelId,
       selectedChannelId: selected.channel.id,
       selectedRouteId: selected.channel.routeId ?? null,
       selectedAccountId: selected.account.id,

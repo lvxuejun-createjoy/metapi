@@ -19,6 +19,7 @@ import { refreshOauthAccessTokenSingleflight } from '../../services/oauth/refres
 import { proxyChannelCoordinator } from '../../services/proxyChannelCoordinator.js';
 import { readRuntimeResponseText } from '../executors/types.js';
 import { selectProxyChannelForAttempt } from '../channelSelection.js';
+import { config } from '../../config.js';
 
 type SelectedChannel = Awaited<ReturnType<typeof tokenRouter.selectChannel>>;
 type SurfaceWarningScope = 'chat' | 'responses';
@@ -101,6 +102,22 @@ type SurfaceResolvedUsageSummary = {
   usageSource: 'upstream' | 'self-log' | 'unknown';
 };
 
+function shouldLogStickyDiagnostics(): boolean {
+  return config.proxyDebugTraceEnabled === true;
+}
+
+function summarizeStickySessionKey(stickySessionKey?: string | null): string {
+  const normalized = String(stickySessionKey || '').trim();
+  if (!normalized) return '';
+  if (normalized.length <= 80) return normalized;
+  return `${normalized.slice(0, 32)}...${normalized.slice(-16)}`;
+}
+
+function logStickyDiagnostics(event: string, details: Record<string, unknown>): void {
+  if (!shouldLogStickyDiagnostics()) return;
+  console.info(`[proxy/sticky] ${event}`, details);
+}
+
 export async function selectSurfaceChannelForAttempt(input: {
   requestedModel: string;
   downstreamPolicy: DownstreamRoutingPolicy;
@@ -118,18 +135,32 @@ export function buildSurfaceStickySessionKey(input: {
   downstreamPath: string;
   downstreamApiKeyId?: number | null;
 }): string | null {
-  return proxyChannelCoordinator.buildStickySessionKey({
+  const stickySessionKey = proxyChannelCoordinator.buildStickySessionKey({
     clientKind: input.clientContext?.clientKind || null,
     sessionId: input.clientContext?.sessionId || null,
     requestedModel: input.requestedModel,
     downstreamPath: input.downstreamPath,
     downstreamApiKeyId: input.downstreamApiKeyId,
   });
+  logStickyDiagnostics('surface-build-key', {
+    clientKind: input.clientContext?.clientKind || null,
+    sessionId: input.clientContext?.sessionId || null,
+    requestedModel: input.requestedModel,
+    downstreamPath: input.downstreamPath,
+    downstreamApiKeyId: input.downstreamApiKeyId ?? null,
+    stickySessionKey: summarizeStickySessionKey(stickySessionKey),
+  });
+  return stickySessionKey;
 }
 
 export function getSurfaceStickyPreferredChannelId(stickySessionKey?: string | null): number | null {
   if (!stickySessionKey) return null;
-  return proxyChannelCoordinator.getStickyChannelId(stickySessionKey) ?? null;
+  const channelId = proxyChannelCoordinator.getStickyChannelId(stickySessionKey) ?? null;
+  logStickyDiagnostics('surface-preferred-channel', {
+    stickySessionKey: summarizeStickySessionKey(stickySessionKey),
+    channelId,
+  });
+  return channelId;
 }
 
 export function bindSurfaceStickyChannel(input: {
@@ -139,6 +170,11 @@ export function bindSurfaceStickyChannel(input: {
     account?: { extraConfig?: string | null; oauthProvider?: string | null } | null;
   };
 }): void {
+  logStickyDiagnostics('surface-bind', {
+    stickySessionKey: summarizeStickySessionKey(input.stickySessionKey),
+    channelId: input.selected.channel.id,
+    accountOauthProvider: input.selected.account?.oauthProvider || null,
+  });
   proxyChannelCoordinator.bindStickyChannel(
     input.stickySessionKey,
     input.selected.channel.id,
@@ -152,6 +188,10 @@ export function clearSurfaceStickyChannel(input: {
     channel: { id: number };
   };
 }): void {
+  logStickyDiagnostics('surface-clear', {
+    stickySessionKey: summarizeStickySessionKey(input.stickySessionKey),
+    channelId: input.selected.channel.id,
+  });
   proxyChannelCoordinator.clearStickyChannel(
     input.stickySessionKey,
     input.selected.channel.id,

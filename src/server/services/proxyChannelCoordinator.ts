@@ -81,6 +81,26 @@ function isSessionScopedChannel(input?: SessionScopedChannelInput): boolean {
     || hasOauthProvider(input);
 }
 
+function canBindStickyChannel(_input?: SessionScopedChannelInput): boolean {
+  return true;
+}
+
+function shouldLogStickyDiagnostics(): boolean {
+  return config.proxyDebugTraceEnabled === true;
+}
+
+function summarizeStickySessionKey(stickySessionKey?: string | null): string {
+  const normalized = String(stickySessionKey || '').trim();
+  if (!normalized) return '';
+  if (normalized.length <= 80) return normalized;
+  return `${normalized.slice(0, 32)}...${normalized.slice(-16)}`;
+}
+
+function logStickyDiagnostics(event: string, details: Record<string, unknown>): void {
+  if (!shouldLogStickyDiagnostics()) return;
+  console.info(`[proxy/sticky] ${event}`, details);
+}
+
 function getStickySessionTtlMs(): number {
   return Math.max(30_000, Math.trunc(config.proxyStickySessionTtlMs || 0));
 }
@@ -148,14 +168,20 @@ class ProxyChannelCoordinator {
     if (!config.proxyStickySessionEnabled) return null;
     const sessionId = String(input.sessionId || '').trim();
     if (!sessionId) return null;
-    const requestedModel = String(input.requestedModel || '').trim().toLowerCase();
-    if (!requestedModel) return null;
-    const downstreamPath = String(input.downstreamPath || '').trim().toLowerCase() || 'unknown';
     const clientKind = String(input.clientKind || 'generic').trim().toLowerCase() || 'generic';
     const owner = typeof input.downstreamApiKeyId === 'number' && Number.isFinite(input.downstreamApiKeyId)
       ? `key:${Math.trunc(input.downstreamApiKeyId)}`
       : 'key:anonymous';
-    return [owner, clientKind, downstreamPath, requestedModel, sessionId].join('|');
+    const stickySessionKey = [owner, clientKind, sessionId].join('|');
+    logStickyDiagnostics('build-key', {
+      owner,
+      clientKind,
+      sessionId,
+      requestedModel: input.requestedModel,
+      downstreamPath: input.downstreamPath,
+      stickySessionKey: summarizeStickySessionKey(stickySessionKey),
+    });
+    return stickySessionKey;
   }
 
   getStickyChannelId(stickySessionKey?: string | null, nowMs = Date.now()): number | null {
@@ -164,21 +190,46 @@ class ProxyChannelCoordinator {
     if (!normalizedKey) return null;
     const entry = stickySessionBindings.get(normalizedKey);
     if (!entry || entry.expiresAtMs <= nowMs) {
+      if (entry && entry.expiresAtMs <= nowMs) {
+        logStickyDiagnostics('lookup-expired', {
+          stickySessionKey: summarizeStickySessionKey(normalizedKey),
+          channelId: entry.channelId,
+          expiresAtMs: entry.expiresAtMs,
+          nowMs,
+        });
+      } else {
+        logStickyDiagnostics('lookup-miss', {
+          stickySessionKey: summarizeStickySessionKey(normalizedKey),
+        });
+      }
       stickySessionBindings.delete(normalizedKey);
       return null;
     }
+    logStickyDiagnostics('lookup-hit', {
+      stickySessionKey: summarizeStickySessionKey(normalizedKey),
+      channelId: entry.channelId,
+      expiresAtMs: entry.expiresAtMs,
+      nowMs,
+    });
     return entry.channelId;
   }
 
   bindStickyChannel(stickySessionKey: string | null | undefined, channelId: number, accountIdentity?: SessionScopedChannelInput): void {
     if (!config.proxyStickySessionEnabled) return;
-    if (!isSessionScopedChannel(accountIdentity)) return;
+    if (!canBindStickyChannel(accountIdentity)) return;
     const normalizedKey = String(stickySessionKey || '').trim();
     if (!normalizedKey || !Number.isFinite(channelId) || channelId <= 0) return;
     cleanupExpiredStickyBindings();
+    const expiresAtMs = Date.now() + getStickySessionTtlMs();
     stickySessionBindings.set(normalizedKey, {
       channelId: Math.trunc(channelId),
-      expiresAtMs: Date.now() + getStickySessionTtlMs(),
+      expiresAtMs,
+    });
+    logStickyDiagnostics('bind', {
+      stickySessionKey: summarizeStickySessionKey(normalizedKey),
+      channelId: Math.trunc(channelId),
+      expiresAtMs,
+      sessionScoped: isSessionScopedChannel(accountIdentity),
     });
   }
 
@@ -188,9 +239,18 @@ class ProxyChannelCoordinator {
     const existing = stickySessionBindings.get(normalizedKey);
     if (!existing) return;
     if (typeof channelId === 'number' && Number.isFinite(channelId) && existing.channelId !== Math.trunc(channelId)) {
+      logStickyDiagnostics('clear-skip-channel-mismatch', {
+        stickySessionKey: summarizeStickySessionKey(normalizedKey),
+        expectedChannelId: existing.channelId,
+        requestedChannelId: Math.trunc(channelId),
+      });
       return;
     }
     stickySessionBindings.delete(normalizedKey);
+    logStickyDiagnostics('clear', {
+      stickySessionKey: summarizeStickySessionKey(normalizedKey),
+      channelId: existing.channelId,
+    });
   }
 
   getActiveChannelIds(): number[] {

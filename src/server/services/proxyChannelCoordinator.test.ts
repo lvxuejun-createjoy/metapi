@@ -51,7 +51,27 @@ describe('proxyChannelCoordinator', () => {
     expect(proxyChannelCoordinator.getStickyChannelId(key)).toBeNull();
   });
 
-  it('does not store sticky bindings for apikey-only channels', () => {
+  it('reuses the same sticky key for the same session even when model and downstream path differ', () => {
+    const firstKey = proxyChannelCoordinator.buildStickySessionKey({
+      clientKind: 'claude_code',
+      sessionId: 'session-abc-123',
+      requestedModel: 'claude-sonnet-4-6',
+      downstreamPath: '/v1/messages',
+      downstreamApiKeyId: 9,
+    });
+    const secondKey = proxyChannelCoordinator.buildStickySessionKey({
+      clientKind: 'claude_code',
+      sessionId: 'session-abc-123',
+      requestedModel: 'claude-opus-4-6',
+      downstreamPath: '/v1/messages/count_tokens',
+      downstreamApiKeyId: 9,
+    });
+
+    expect(firstKey).toBe('key:9|claude_code|session-abc-123');
+    expect(secondKey).toBe(firstKey);
+  });
+
+  it('stores sticky bindings for apikey-only channels', () => {
     const key = proxyChannelCoordinator.buildStickySessionKey({
       clientKind: 'codex',
       sessionId: 'turn-456',
@@ -61,7 +81,7 @@ describe('proxyChannelCoordinator', () => {
     });
 
     proxyChannelCoordinator.bindStickyChannel(key, 42, JSON.stringify({ credentialMode: 'apikey' }));
-    expect(proxyChannelCoordinator.getStickyChannelId(key)).toBeNull();
+    expect(proxyChannelCoordinator.getStickyChannelId(key)).toBe(42);
   });
 
   it('treats structured oauth providers as session-scoped even when extraConfig omits oauth.provider', () => {
