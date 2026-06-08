@@ -604,6 +604,91 @@ describe('selectSurfaceChannelForAttempt', () => {
     });
   });
 
+  it('does not report API key connections as expired for a plain upstream 401', async () => {
+    composeProxyLogMessageMock.mockReturnValue('normalized error');
+    formatUtcSqlDateTimeMock.mockReturnValue('2026-03-21 22:00:00');
+    insertProxyLogMock.mockResolvedValue(undefined);
+    shouldRetryProxyRequestMock.mockReturnValue(false);
+    isTokenExpiredErrorMock.mockReturnValue(true);
+    recordOauthQuotaResetHintMock.mockResolvedValue(null);
+
+    const { createSurfaceFailureToolkit } = await import('./sharedSurface.js');
+    const toolkit = createSurfaceFailureToolkit({
+      warningScope: 'responses',
+      downstreamPath: '/v1/responses',
+      maxRetries: 0,
+      clientContext: null,
+      downstreamApiKeyId: null,
+    });
+
+    await toolkit.handleUpstreamFailure({
+      selected: {
+        channel: { id: 11, routeId: 22 },
+        account: {
+          id: 33,
+          username: 'apikey-user',
+          extraConfig: JSON.stringify({ credentialMode: 'apikey' }),
+        },
+        site: { name: 'API Key Site' },
+        actualModel: 'upstream-model',
+      },
+      requestedModel: 'gpt-5.2',
+      modelName: 'upstream-model',
+      status: 401,
+      errText: 'Unauthorized',
+      rawErrText: 'Unauthorized',
+      latencyMs: 900,
+      retryCount: 0,
+    });
+
+    expect(reportTokenExpiredMock).not.toHaveBeenCalled();
+  });
+
+  it('reports API key connections as expired for explicit API key failures', async () => {
+    composeProxyLogMessageMock.mockReturnValue('normalized error');
+    formatUtcSqlDateTimeMock.mockReturnValue('2026-03-21 22:00:00');
+    insertProxyLogMock.mockResolvedValue(undefined);
+    shouldRetryProxyRequestMock.mockReturnValue(false);
+    isTokenExpiredErrorMock.mockReturnValue(true);
+    recordOauthQuotaResetHintMock.mockResolvedValue(null);
+
+    const { createSurfaceFailureToolkit } = await import('./sharedSurface.js');
+    const toolkit = createSurfaceFailureToolkit({
+      warningScope: 'responses',
+      downstreamPath: '/v1/responses',
+      maxRetries: 0,
+      clientContext: null,
+      downstreamApiKeyId: null,
+    });
+
+    await toolkit.handleUpstreamFailure({
+      selected: {
+        channel: { id: 11, routeId: 22 },
+        account: {
+          id: 33,
+          username: 'apikey-user',
+          extraConfig: JSON.stringify({ credentialMode: 'apikey' }),
+        },
+        site: { name: 'API Key Site' },
+        actualModel: 'upstream-model',
+      },
+      requestedModel: 'gpt-5.2',
+      modelName: 'upstream-model',
+      status: 401,
+      errText: 'invalid api key',
+      rawErrText: '{"error":"invalid api key"}',
+      latencyMs: 900,
+      retryCount: 0,
+    });
+
+    expect(reportTokenExpiredMock).toHaveBeenCalledWith({
+      accountId: 33,
+      username: 'apikey-user',
+      siteName: 'API Key Site',
+      detail: 'HTTP 401',
+    });
+  });
+
   it('returns terminal failures even when final alerting throws', async () => {
     composeProxyLogMessageMock.mockReturnValue('normalized error');
     formatUtcSqlDateTimeMock.mockReturnValue('2026-03-21 22:00:00');

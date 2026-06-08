@@ -6,6 +6,7 @@ import { resolveProxyUsageWithSelfLogFallback } from '../../services/proxyUsageF
 import type { DownstreamRoutingPolicy } from '../../services/downstreamPolicyTypes.js';
 import { reportProxyAllFailed, reportTokenExpired } from '../../services/alertService.js';
 import { isTokenExpiredError } from '../../services/alertRules.js';
+import { getCredentialModeFromExtraConfig } from '../../services/accountExtraConfig.js';
 import { shouldRetryProxyRequest } from '../../services/proxyRetryPolicy.js';
 import { composeProxyLogMessage } from '../../services/proxyLogMessage.js';
 import { resolveProxyLogBilling } from '../../services/proxyBilling.js';
@@ -26,7 +27,7 @@ type SurfaceWarningScope = 'chat' | 'responses';
 
 type SurfaceSelectedChannel = {
   channel: { routeId: number | null; id: number };
-  account: { id: number; username?: string | null };
+  account: { id: number; username?: string | null; extraConfig?: string | null };
   site: { name?: string | null };
   actualModel?: string | null;
 };
@@ -116,6 +117,30 @@ function summarizeStickySessionKey(stickySessionKey?: string | null): string {
 function logStickyDiagnostics(event: string, details: Record<string, unknown>): void {
   if (!shouldLogStickyDiagnostics()) return;
   console.info(`[proxy/sticky] ${event}`, details);
+}
+
+function isExplicitApiKeyCredentialFailure(message?: string | null): boolean {
+  const text = String(message || '').trim().toLowerCase();
+  if (!text) return false;
+  return /\binvalid\s+api\s+key\b/.test(text)
+    || /\bapi\s+key\s+expired\b/.test(text)
+    || /\binvalid\s+access\s+token\b/.test(text);
+}
+
+function shouldReportTokenExpiredForSurfaceFailure(input: {
+  selected: SurfaceSelectedChannel;
+  status: number;
+  errText?: string | null;
+  rawErrText?: string | null;
+}): boolean {
+  const message = input.rawErrText || input.errText || '';
+  if (!isTokenExpiredError({ status: input.status, message })) return false;
+
+  const credentialMode = getCredentialModeFromExtraConfig(input.selected.account.extraConfig);
+  if (credentialMode !== 'apikey') return true;
+
+  return isExplicitApiKeyCredentialFailure(message)
+    || isExplicitApiKeyCredentialFailure(input.errText);
 }
 
 export async function selectSurfaceChannelForAttempt(input: {
@@ -606,7 +631,12 @@ export function createSurfaceFailureToolkit(input: {
         errorText: rawErrText,
       }));
 
-      if (isTokenExpiredError({ status: args.status, message: args.errText })) {
+      if (shouldReportTokenExpiredForSurfaceFailure({
+        selected: args.selected,
+        status: args.status,
+        errText: args.errText,
+        rawErrText: rawErrText,
+      })) {
         runBestEffort('report token expired', () => reportTokenExpired({
           accountId: args.selected.account.id,
           username: args.selected.account.username,

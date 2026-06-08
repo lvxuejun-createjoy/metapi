@@ -320,6 +320,47 @@ describe('refreshModelsForAccount credential discovery', () => {
     expect(parsed.runtimeHealth?.checkedAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
   });
 
+  it('marks API key model discovery network failures as degraded instead of unhealthy', async () => {
+    getApiTokenMock.mockResolvedValue(null);
+    getModelsMock.mockRejectedValue(new Error('fetch failed: ETIMEDOUT'));
+
+    const site = await db.insert(schema.sites).values({
+      name: 'site-timeout',
+      url: 'https://site-timeout.example.com',
+      platform: 'new-api',
+      status: 'active',
+    }).returning().get();
+
+    const account = await db.insert(schema.accounts).values({
+      siteId: site.id,
+      username: 'timeout-user',
+      accessToken: '',
+      apiToken: 'sk-valid-but-network-flaky',
+      status: 'active',
+      extraConfig: JSON.stringify({ credentialMode: 'apikey' }),
+    }).returning().get();
+
+    const result = await refreshModelsForAccount(account.id);
+
+    expect(result).toMatchObject({
+      accountId: account.id,
+      refreshed: true,
+      modelCount: 0,
+      modelsPreview: [],
+      tokenScanned: 0,
+      status: 'failed',
+      errorCode: 'timeout',
+    });
+
+    const latest = await db.select().from(schema.accounts)
+      .where(eq(schema.accounts.id, account.id))
+      .get();
+    const parsed = JSON.parse(latest!.extraConfig || '{}');
+    expect(parsed.runtimeHealth?.state).toBe('degraded');
+    expect(parsed.runtimeHealth?.source).toBe('model-discovery');
+    expect(parsed.runtimeHealth?.reason).toBe('模型获取失败（请求超时）');
+  });
+
   it('normalizes anyrouter html challenge parse errors during model discovery', async () => {
     getApiTokenMock.mockResolvedValue(null);
     getModelsMock.mockRejectedValue(new Error("Unexpected token '<', \"<html><scr\"... is not valid JSON"));

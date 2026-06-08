@@ -35,6 +35,12 @@ import {
   validateGeminiCliOauthConnection,
 } from './platformDiscoveryRegistry.js';
 import { probeRuntimeModel, type RuntimeModelProbeStatus } from './runtimeModelProbe.js';
+import {
+  buildModelFailureMessage,
+  classifyModelDiscoveryError,
+  resolveModelDiscoveryRuntimeHealthState,
+  type ModelRefreshErrorCode,
+} from './modelDiscoveryHealth.js';
 
 const API_TOKEN_DISCOVERY_TIMEOUT_MS = 8_000;
 const MODEL_DISCOVERY_TIMEOUT_MS = 12_000;
@@ -53,7 +59,6 @@ let inFlightRefreshModelsAndRebuildRoutes: Promise<{
   rebuild: Awaited<ReturnType<typeof rebuildTokenRoutesFromAvailability>>;
 }> | null = null;
 
-type ModelRefreshErrorCode = 'timeout' | 'unauthorized' | 'empty_models' | 'unknown';
 type ModelRefreshSkipCode = 'site_disabled' | 'adapter_or_status';
 
 export type ModelRefreshAccountNotFoundResult = {
@@ -146,50 +151,6 @@ function getRefreshedOauthAccountFromError(error: unknown): ModelDiscoveryAccoun
     (error as Record<symbol, ModelDiscoveryAccountRow | undefined>)[REFRESHED_OAUTH_ACCOUNT]
     || null
   );
-}
-
-function looksLikeHtmlJsonParseError(message: string): boolean {
-  const lowered = String(message || '').trim().toLowerCase();
-  return (
-    lowered.includes('unexpected token')
-    && lowered.includes('not valid json')
-    && (lowered.includes('<html') || lowered.includes('<script'))
-  );
-}
-
-function looksLikeShieldChallenge(message: string): boolean {
-  const lowered = String(message || '').trim().toLowerCase();
-  return (
-    lowered.includes('acw_sc__v2')
-    || lowered.includes('var arg1')
-    || lowered.includes('captcha')
-    || lowered.includes('challenge')
-    || lowered.includes('cloudflare tunnel error')
-  );
-}
-
-function classifyModelDiscoveryError(message: string): ModelRefreshErrorCode {
-  const lowered = message.toLowerCase();
-  if (lowered.includes('timeout') || lowered.includes('timed out') || lowered.includes('请求超时')) return 'timeout';
-  if (lowered.includes('http 401') || lowered.includes('http 403')
-    || lowered.includes('unauthorized') || lowered.includes('invalid')
-    || lowered.includes('无权') || lowered.includes('未提供令牌')) return 'unauthorized';
-  return 'unknown';
-}
-
-function buildModelFailureMessage(code: ModelRefreshErrorCode, fallback?: string, platform?: string | null) {
-  const raw = String(fallback || '').trim();
-  if (looksLikeHtmlJsonParseError(raw) || looksLikeShieldChallenge(raw)) {
-    const normalizedPlatform = String(platform || '').trim().toLowerCase();
-    if (normalizedPlatform === 'new-api' || normalizedPlatform === 'anyrouter') {
-      return '模型获取失败：站点返回了防护页面，请在目标站点创建 API Key 后再同步模型';
-    }
-    return '模型获取失败：站点返回了网页而不是 JSON 响应';
-  }
-  if (code === 'timeout') return '模型获取失败（请求超时）';
-  if (code === 'unauthorized') return '模型获取失败，API Key 已无效';
-  if (code === 'empty_models') return '模型获取失败：未获取到可用模型';
-  return fallback || '模型获取失败';
 }
 
 function isSiteDisabled(status?: string | null): boolean {
@@ -1123,7 +1084,12 @@ export async function refreshModelsForAccount(
     const errorCode = classifyModelDiscoveryError(rawMessage);
     const errorMessage = rawMessage;
     await setAccountRuntimeHealth(account.id, {
-      state: 'unhealthy',
+      state: resolveModelDiscoveryRuntimeHealthState({
+        accountExtraConfig: account.extraConfig,
+        errorCode,
+        errorMessage,
+        rawErrorMessage: rawMessage,
+      }),
       reason: errorMessage,
       source: 'model-discovery',
       checkedAt: new Date().toISOString(),
@@ -1239,7 +1205,12 @@ export async function refreshModelsForAccount(
     const errorCode = firstMessage ? classifyModelDiscoveryError(firstMessage) : 'empty_models';
     const errorMessage = buildModelFailureMessage(errorCode, firstMessage, site.platform);
     await setAccountRuntimeHealth(account.id, {
-      state: 'unhealthy',
+      state: resolveModelDiscoveryRuntimeHealthState({
+        accountExtraConfig: account.extraConfig,
+        errorCode,
+        errorMessage,
+        rawErrorMessage: firstMessage,
+      }),
       reason: errorMessage,
       source: 'model-discovery',
       checkedAt: new Date().toISOString(),
