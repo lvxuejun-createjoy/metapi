@@ -59,10 +59,10 @@ import {
   bindSurfaceStickyChannel,
   buildSurfaceChannelBusyMessage,
   buildSurfaceStickySessionKey,
-  clearSurfaceStickyChannel,
   createSurfaceFailureToolkit,
   createSurfaceDispatchRequest,
   getSurfaceStickyPreferredChannelId,
+  recordSurfaceStickyFailure,
   recordSurfaceSuccess,
   selectSurfaceChannelForAttempt,
   trySurfaceOauthRefreshRecovery,
@@ -225,18 +225,19 @@ export async function handleChatSurfaceRequest(
   });
   const downstreamApiKeyId = getProxyAuthContext(request)?.keyId ?? null;
   const maxRetries = getProxyMaxChannelRetries();
+  const stickySessionKey = buildSurfaceStickySessionKey({
+    clientContext,
+    requestedModel,
+    downstreamPath,
+    downstreamApiKeyId,
+  });
   const failureToolkit = createSurfaceFailureToolkit({
     warningScope: 'chat',
     downstreamPath,
     maxRetries,
     clientContext,
     downstreamApiKeyId,
-  });
-  const stickySessionKey = buildSurfaceStickySessionKey({
-    clientContext,
-    requestedModel,
-    downstreamPath,
-    downstreamApiKeyId,
+    stickySessionKey,
   });
   const debugTrace = await startSurfaceProxyDebugTrace({
     downstreamPath,
@@ -563,7 +564,7 @@ export async function handleChatSurfaceRequest(
       selected,
     });
     if (leaseResult.status === 'timeout') {
-      clearSurfaceStickyChannel({
+      recordSurfaceStickyFailure({
         stickySessionKey,
         selected,
       });
@@ -701,10 +702,6 @@ export async function handleChatSurfaceRequest(
             );
             const latency = Date.now() - startTime;
             if (streamResult.status === 'failed') {
-              clearSurfaceStickyChannel({
-                stickySessionKey,
-                selected,
-              });
               await failureToolkit.recordStreamFailure({
                 selected,
                 requestedModel,
@@ -765,10 +762,6 @@ export async function handleChatSurfaceRequest(
           const latency = Date.now() - startTime;
           const failure = detectProxyFailure({ rawText, usage: parsedUsage });
           if (failure) {
-            clearSurfaceStickyChannel({
-              stickySessionKey,
-              selected,
-            });
             const failureOutcome = await failureToolkit.handleDetectedFailure({
               selected,
               requestedModel,
@@ -800,10 +793,6 @@ export async function handleChatSurfaceRequest(
 
           const streamResult = streamSession.consumeUpstreamFinalPayload(fallbackData, fallbackText, streamResponse);
           if (streamResult.status === 'failed') {
-            clearSurfaceStickyChannel({
-              stickySessionKey,
-              selected,
-            });
             await failureToolkit.recordStreamFailure({
               selected,
               requestedModel,
@@ -878,10 +867,6 @@ export async function handleChatSurfaceRequest(
 
           const latency = Date.now() - startTime;
           if (streamResult.status === 'failed') {
-            clearSurfaceStickyChannel({
-              stickySessionKey,
-              selected,
-            });
             await failureToolkit.recordStreamFailure({
               selected,
               requestedModel,
@@ -967,10 +952,6 @@ export async function handleChatSurfaceRequest(
       const upstreamUsagePresent = hasProxyUsagePayload(upstreamData);
       const failure = detectProxyFailure({ rawText, usage: parsedUsage });
       if (failure) {
-        clearSurfaceStickyChannel({
-          stickySessionKey,
-          selected,
-        });
         const failureOutcome = await failureToolkit.handleDetectedFailure({
           selected,
           requestedModel,
@@ -1036,10 +1017,6 @@ export async function handleChatSurfaceRequest(
 
       return reply.send(downstreamResponse);
     } catch (err: any) {
-      clearSurfaceStickyChannel({
-        stickySessionKey,
-        selected,
-      });
       const endpointFailureStatus = typeof err?.status === 'number' ? err.status : null;
       const isSiteApiEndpointFailure = (
         err instanceof SiteApiEndpointRequestError
@@ -1182,18 +1159,19 @@ export async function handleClaudeCountTokensSurfaceRequest(
   });
   const downstreamApiKeyId = getProxyAuthContext(request)?.keyId ?? null;
   const maxRetries = getProxyMaxChannelRetries();
+  const stickySessionKey = buildSurfaceStickySessionKey({
+    clientContext,
+    requestedModel,
+    downstreamPath,
+    downstreamApiKeyId,
+  });
   const failureToolkit = createSurfaceFailureToolkit({
     warningScope: 'chat',
     downstreamPath,
     maxRetries,
     clientContext,
     downstreamApiKeyId,
-  });
-  const stickySessionKey = buildSurfaceStickySessionKey({
-    clientContext,
-    requestedModel,
-    downstreamPath,
-    downstreamApiKeyId,
+    stickySessionKey,
   });
   const debugTrace = await startSurfaceProxyDebugTrace({
     downstreamPath,
@@ -1338,7 +1316,7 @@ export async function handleClaudeCountTokensSurfaceRequest(
       selected,
     });
     if (leaseResult.status === 'timeout') {
-      clearSurfaceStickyChannel({
+      recordSurfaceStickyFailure({
         stickySessionKey,
         selected,
       });
@@ -1498,10 +1476,6 @@ export async function handleClaudeCountTokensSurfaceRequest(
       );
       return reply.code(upstream.status).type(contentType).send(payload);
     } catch (error: any) {
-      clearSurfaceStickyChannel({
-        stickySessionKey,
-        selected,
-      });
       const endpointFailureStatus = typeof error?.status === 'number' ? error.status : null;
       const isSiteApiEndpointFailure = (
         error instanceof SiteApiEndpointRequestError

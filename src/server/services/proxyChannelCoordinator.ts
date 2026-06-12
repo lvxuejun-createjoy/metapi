@@ -9,6 +9,11 @@ type StickyEntry = {
   expiresAtMs: number;
 };
 
+type StickyFailureEntry = {
+  count: number;
+  updatedAtMs: number;
+};
+
 type ActiveLeaseState = {
   release: () => void;
 };
@@ -46,6 +51,7 @@ export type AcquireProxyChannelLeaseResult =
   | { status: 'timeout'; waitMs: number };
 
 const stickySessionBindings = new Map<string, StickyEntry>();
+const stickyFailureCounts = new Map<string, StickyFailureEntry>();
 const channelRuntimeStates = new Map<number, ChannelRuntimeState>();
 let nextLeaseId = 1;
 type SessionScopedChannelInput =
@@ -67,6 +73,11 @@ function cleanupExpiredStickyBindings(nowMs = Date.now()): void {
   for (const [key, entry] of stickySessionBindings.entries()) {
     if (entry.expiresAtMs <= nowMs) {
       stickySessionBindings.delete(key);
+      for (const failureKey of stickyFailureCounts.keys()) {
+        if (failureKey.startsWith(`${key}|`)) {
+          stickyFailureCounts.delete(failureKey);
+        }
+      }
     }
   }
 }
@@ -103,6 +114,17 @@ function logStickyDiagnostics(event: string, details: Record<string, unknown>): 
 
 function getStickySessionTtlMs(): number {
   return Math.max(30_000, Math.trunc(config.proxyStickySessionTtlMs || 0));
+}
+
+function getStickyFailureThreshold(): number {
+  return Math.max(1, Math.trunc(config.proxyStickyFailureThreshold || 5));
+}
+
+function buildStickyFailureKey(stickySessionKey?: string | null, channelId?: number | null): string | null {
+  const normalizedKey = String(stickySessionKey || '').trim();
+  const normalizedChannelId = Math.trunc(channelId || 0);
+  if (!normalizedKey || !Number.isFinite(normalizedChannelId) || normalizedChannelId <= 0) return null;
+  return `${normalizedKey}|channel:${normalizedChannelId}`;
 }
 
 function getChannelLeaseTtlMs(): number {
@@ -225,6 +247,7 @@ class ProxyChannelCoordinator {
       channelId: Math.trunc(channelId),
       expiresAtMs,
     });
+    this.clearStickyFailureCount(normalizedKey, Math.trunc(channelId));
     logStickyDiagnostics('bind', {
       stickySessionKey: summarizeStickySessionKey(normalizedKey),
       channelId: Math.trunc(channelId),
@@ -247,10 +270,61 @@ class ProxyChannelCoordinator {
       return;
     }
     stickySessionBindings.delete(normalizedKey);
+    this.clearStickyFailureCount(normalizedKey, existing.channelId);
     logStickyDiagnostics('clear', {
       stickySessionKey: summarizeStickySessionKey(normalizedKey),
       channelId: existing.channelId,
     });
+  }
+
+  recordStickyFailure(stickySessionKey?: string | null, channelId?: number | null): {
+    count: number;
+    threshold: number;
+    thresholdReached: boolean;
+  } {
+    const failureKey = buildStickyFailureKey(stickySessionKey, channelId);
+    const threshold = getStickyFailureThreshold();
+    if (!failureKey) {
+      return {
+        count: threshold,
+        threshold,
+        thresholdReached: true,
+      };
+    }
+    cleanupExpiredStickyBindings();
+    const previous = stickyFailureCounts.get(failureKey);
+    const count = (previous?.count ?? 0) + 1;
+    stickyFailureCounts.set(failureKey, {
+      count,
+      updatedAtMs: Date.now(),
+    });
+    const thresholdReached = count >= threshold;
+    logStickyDiagnostics('failure-count', {
+      stickySessionKey: summarizeStickySessionKey(stickySessionKey),
+      channelId: Math.trunc(channelId || 0),
+      count,
+      threshold,
+      thresholdReached,
+    });
+    return {
+      count,
+      threshold,
+      thresholdReached,
+    };
+  }
+
+  clearStickyFailureCount(stickySessionKey?: string | null, channelId?: number | null): void {
+    const failureKey = buildStickyFailureKey(stickySessionKey, channelId);
+    if (!failureKey) return;
+    const existing = stickyFailureCounts.get(failureKey);
+    stickyFailureCounts.delete(failureKey);
+    if (existing) {
+      logStickyDiagnostics('failure-count-clear', {
+        stickySessionKey: summarizeStickySessionKey(stickySessionKey),
+        channelId: Math.trunc(channelId || 0),
+        count: existing.count,
+      });
+    }
   }
 
   getActiveChannelIds(): number[] {
@@ -436,6 +510,7 @@ class ProxyChannelCoordinator {
 
 export function resetProxyChannelCoordinatorState(): void {
   stickySessionBindings.clear();
+  stickyFailureCounts.clear();
   channelRuntimeStates.clear();
   nextLeaseId = 1;
 }

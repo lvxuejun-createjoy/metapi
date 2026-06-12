@@ -62,6 +62,13 @@ type SurfaceOauthRefreshContext<TRequest extends BuiltEndpointRequest> = {
   rawErrText: string;
 };
 
+type SurfaceStickyFailureDecision = {
+  shouldRecordChannelFailure: boolean;
+  count: number;
+  threshold: number;
+  thresholdReached: boolean;
+};
+
 type SurfaceSuccessSelectedChannel = SurfaceSelectedChannel & {
   account: Record<string, unknown> & {
     id: number;
@@ -207,6 +214,18 @@ export function bindSurfaceStickyChannel(input: {
   );
 }
 
+export function clearSurfaceStickyFailureCount(input: {
+  stickySessionKey?: string | null;
+  selected: {
+    channel: { id: number };
+  };
+}): void {
+  proxyChannelCoordinator.clearStickyFailureCount(
+    input.stickySessionKey,
+    input.selected.channel.id,
+  );
+}
+
 export function clearSurfaceStickyChannel(input: {
   stickySessionKey?: string | null;
   selected: {
@@ -221,6 +240,44 @@ export function clearSurfaceStickyChannel(input: {
     input.stickySessionKey,
     input.selected.channel.id,
   );
+}
+
+export function recordSurfaceStickyFailure(input: {
+  stickySessionKey?: string | null;
+  selected: {
+    channel: { id: number };
+  };
+}): { count: number; threshold: number; thresholdReached: boolean } {
+  if (!String(input.stickySessionKey || '').trim()) {
+    return {
+      count: 1,
+      threshold: 1,
+      thresholdReached: true,
+    };
+  }
+  const result = proxyChannelCoordinator.recordStickyFailure(
+    input.stickySessionKey,
+    input.selected.channel.id,
+  );
+  if (result.thresholdReached) {
+    clearSurfaceStickyChannel(input);
+  }
+  return result;
+}
+
+function handleSurfaceStickyFailure(input: {
+  stickySessionKey?: string | null;
+  selected: {
+    channel: { id: number };
+  };
+}): SurfaceStickyFailureDecision {
+  const result = recordSurfaceStickyFailure(input);
+  return {
+    shouldRecordChannelFailure: result.thresholdReached,
+    count: result.count,
+    threshold: result.threshold,
+    thresholdReached: result.thresholdReached,
+  };
 }
 
 export async function acquireSurfaceChannelLease(input: {
@@ -539,6 +596,7 @@ export function createSurfaceFailureToolkit(input: {
   maxRetries: number;
   clientContext?: DownstreamClientContext | null;
   downstreamApiKeyId?: number | null;
+  stickySessionKey?: string | null;
 }) {
   const log = async (args: {
     selected: SurfaceSelectedChannel;
@@ -609,11 +667,17 @@ export function createSurfaceFailureToolkit(input: {
       retryCount: number;
     }): Promise<SurfaceFailureOutcome> {
       const rawErrText = args.rawErrText || args.errText;
-      await tokenRouter.recordFailure(args.selected.channel.id, {
-        status: args.status,
-        errorText: rawErrText,
-        modelName: args.modelName,
+      const stickyFailure = handleSurfaceStickyFailure({
+        stickySessionKey: input.stickySessionKey,
+        selected: args.selected,
       });
+      if (stickyFailure.shouldRecordChannelFailure) {
+        await tokenRouter.recordFailure(args.selected.channel.id, {
+          status: args.status,
+          errorText: rawErrText,
+          modelName: args.modelName,
+        });
+      }
       await log({
         selected: args.selected,
         modelRequested: args.requestedModel,
@@ -681,11 +745,17 @@ export function createSurfaceFailureToolkit(input: {
       totalTokens?: number | null;
       upstreamPath?: string | null;
     }): Promise<SurfaceFailureOutcome> {
-      await tokenRouter.recordFailure(args.selected.channel.id, {
-        status: args.failure.status,
-        errorText: args.failure.reason,
-        modelName: args.modelName,
+      const stickyFailure = handleSurfaceStickyFailure({
+        stickySessionKey: input.stickySessionKey,
+        selected: args.selected,
       });
+      if (stickyFailure.shouldRecordChannelFailure) {
+        await tokenRouter.recordFailure(args.selected.channel.id, {
+          status: args.failure.status,
+          errorText: args.failure.reason,
+          modelName: args.modelName,
+        });
+      }
       await log({
         selected: args.selected,
         modelRequested: args.requestedModel,
@@ -734,10 +804,16 @@ export function createSurfaceFailureToolkit(input: {
       latencyMs: number;
       retryCount: number;
     }): Promise<SurfaceFailureOutcome> {
-      await tokenRouter.recordFailure(args.selected.channel.id, {
-        errorText: args.errorMessage,
-        modelName: args.modelName,
+      const stickyFailure = handleSurfaceStickyFailure({
+        stickySessionKey: input.stickySessionKey,
+        selected: args.selected,
       });
+      if (stickyFailure.shouldRecordChannelFailure) {
+        await tokenRouter.recordFailure(args.selected.channel.id, {
+          errorText: args.errorMessage,
+          modelName: args.modelName,
+        });
+      }
       await log({
         selected: args.selected,
         modelRequested: args.requestedModel,
@@ -787,17 +863,23 @@ export function createSurfaceFailureToolkit(input: {
       runtimeFailureStatus?: number | null;
     }) {
       const errorMessage = args.errorMessage || 'stream processing failed';
-      if (typeof args.runtimeFailureStatus === 'number') {
-        await tokenRouter.recordFailure(args.selected.channel.id, {
-          status: args.runtimeFailureStatus,
-          errorText: errorMessage,
-          modelName: args.modelName,
-        });
-      } else {
-        await tokenRouter.recordFailure(args.selected.channel.id, {
-          errorText: errorMessage,
-          modelName: args.modelName,
-        });
+      const stickyFailure = handleSurfaceStickyFailure({
+        stickySessionKey: input.stickySessionKey,
+        selected: args.selected,
+      });
+      if (stickyFailure.shouldRecordChannelFailure) {
+        if (typeof args.runtimeFailureStatus === 'number') {
+          await tokenRouter.recordFailure(args.selected.channel.id, {
+            status: args.runtimeFailureStatus,
+            errorText: errorMessage,
+            modelName: args.modelName,
+          });
+        } else {
+          await tokenRouter.recordFailure(args.selected.channel.id, {
+            errorText: errorMessage,
+            modelName: args.modelName,
+          });
+        }
       }
       await log({
         selected: args.selected,

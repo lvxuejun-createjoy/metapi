@@ -25,6 +25,8 @@ const refreshOauthAccessTokenSingleflightMock = vi.fn();
 const getStickyChannelIdMock = vi.fn();
 const bindStickyChannelMock = vi.fn();
 const clearStickyChannelMock = vi.fn();
+const recordStickyFailureMock = vi.fn();
+const clearStickyFailureCountMock = vi.fn();
 const acquireChannelLeaseMock = vi.fn();
 const buildStickySessionKeyMock = vi.fn();
 const consoleWarnMock = vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -45,6 +47,8 @@ vi.mock('../../services/proxyChannelCoordinator.js', () => ({
     getStickyChannelId: (...args: unknown[]) => getStickyChannelIdMock(...args),
     bindStickyChannel: (...args: unknown[]) => bindStickyChannelMock(...args),
     clearStickyChannel: (...args: unknown[]) => clearStickyChannelMock(...args),
+    recordStickyFailure: (...args: unknown[]) => recordStickyFailureMock(...args),
+    clearStickyFailureCount: (...args: unknown[]) => clearStickyFailureCountMock(...args),
     acquireChannelLease: (...args: unknown[]) => acquireChannelLeaseMock(...args),
     buildStickySessionKey: (...args: unknown[]) => buildStickySessionKeyMock(...args),
   },
@@ -137,6 +141,13 @@ describe('selectSurfaceChannelForAttempt', () => {
     getStickyChannelIdMock.mockReset();
     bindStickyChannelMock.mockReset();
     clearStickyChannelMock.mockReset();
+    recordStickyFailureMock.mockReset();
+    recordStickyFailureMock.mockReturnValue({
+      count: 1,
+      threshold: 5,
+      thresholdReached: false,
+    });
+    clearStickyFailureCountMock.mockReset();
     acquireChannelLeaseMock.mockReset();
     buildStickySessionKeyMock.mockReset();
     consoleWarnMock.mockClear();
@@ -471,6 +482,7 @@ describe('selectSurfaceChannelForAttempt', () => {
       maxRetries: 2,
       clientContext: null,
       downstreamApiKeyId: 44,
+      stickySessionKey: 'sticky-session',
     });
 
     const result = await toolkit.handleUpstreamFailure({
@@ -490,11 +502,8 @@ describe('selectSurfaceChannelForAttempt', () => {
     });
 
     expect(result).toEqual({ action: 'retry' });
-    expect(recordFailureMock).toHaveBeenCalledWith(11, {
-      status: 429,
-      errorText: '{"error":"quota exceeded"}',
-      modelName: 'upstream-model',
-    });
+    expect(recordFailureMock).not.toHaveBeenCalled();
+    expect(recordStickyFailureMock).toHaveBeenCalledWith('sticky-session', 11);
     expect(recordOauthQuotaResetHintMock).toHaveBeenCalledWith({
       accountId: 33,
       statusCode: 429,
@@ -738,6 +747,11 @@ describe('selectSurfaceChannelForAttempt', () => {
     formatUtcSqlDateTimeMock.mockReturnValue('2026-03-21 22:00:00');
     insertProxyLogMock.mockResolvedValue(undefined);
     shouldRetryProxyRequestMock.mockReturnValue(false);
+    recordStickyFailureMock.mockReturnValue({
+      count: 5,
+      threshold: 5,
+      thresholdReached: true,
+    });
 
     const { createSurfaceFailureToolkit } = await import('./sharedSurface.js');
     const toolkit = createSurfaceFailureToolkit({
@@ -795,6 +809,11 @@ describe('selectSurfaceChannelForAttempt', () => {
     composeProxyLogMessageMock.mockReturnValue('normalized error');
     formatUtcSqlDateTimeMock.mockReturnValue('2026-03-21 22:00:00');
     insertProxyLogMock.mockResolvedValue(undefined);
+    recordStickyFailureMock.mockReturnValue({
+      count: 5,
+      threshold: 5,
+      thresholdReached: true,
+    });
 
     const { createSurfaceFailureToolkit } = await import('./sharedSurface.js');
     const toolkit = createSurfaceFailureToolkit({
@@ -843,6 +862,11 @@ describe('selectSurfaceChannelForAttempt', () => {
     composeProxyLogMessageMock.mockReturnValue('normalized error');
     formatUtcSqlDateTimeMock.mockReturnValue('2026-03-21 22:00:00');
     insertProxyLogMock.mockResolvedValue(undefined);
+    recordStickyFailureMock.mockReturnValue({
+      count: 5,
+      threshold: 5,
+      thresholdReached: true,
+    });
 
     const { createSurfaceFailureToolkit } = await import('./sharedSurface.js');
     const toolkit = createSurfaceFailureToolkit({
@@ -1276,5 +1300,44 @@ describe('selectSurfaceChannelForAttempt', () => {
       estimatedCost: 0,
       billingDetails: null,
     });
+  });
+
+  it('keeps sticky binding until sticky failure threshold is reached', async () => {
+    recordStickyFailureMock
+      .mockReturnValueOnce({
+        count: 4,
+        threshold: 5,
+        thresholdReached: false,
+      })
+      .mockReturnValueOnce({
+        count: 5,
+        threshold: 5,
+        thresholdReached: true,
+      });
+
+    const { recordSurfaceStickyFailure } = await import('./sharedSurface.js');
+    const selected = {
+      channel: { id: 11 },
+    };
+
+    expect(recordSurfaceStickyFailure({
+      stickySessionKey: 'sticky-session',
+      selected,
+    })).toEqual({
+      count: 4,
+      threshold: 5,
+      thresholdReached: false,
+    });
+    expect(clearStickyChannelMock).not.toHaveBeenCalled();
+
+    expect(recordSurfaceStickyFailure({
+      stickySessionKey: 'sticky-session',
+      selected,
+    })).toEqual({
+      count: 5,
+      threshold: 5,
+      thresholdReached: true,
+    });
+    expect(clearStickyChannelMock).toHaveBeenCalledWith('sticky-session', 11);
   });
 });

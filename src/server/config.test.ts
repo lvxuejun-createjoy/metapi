@@ -39,6 +39,16 @@ describe('buildConfig', () => {
     expect(config.telegramMessageThreadId).toBe('');
   });
 
+  it('defaults sticky failure threshold to five and allows overriding it', () => {
+    expect(buildConfig({}).proxyStickyFailureThreshold).toBe(5);
+    expect(buildConfig({
+      PROXY_STICKY_FAILURE_THRESHOLD: '7',
+    }).proxyStickyFailureThreshold).toBe(7);
+    expect(buildConfig({
+      PROXY_STICKY_FAILURE_THRESHOLD: '0',
+    }).proxyStickyFailureThreshold).toBe(1);
+  });
+
   it('accepts telegram message thread id from environment', () => {
     const config = buildConfig({
       TELEGRAM_MESSAGE_THREAD_ID: '77',

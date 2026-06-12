@@ -8,6 +8,7 @@ import {
 describe('proxyChannelCoordinator', () => {
   const originalStickyEnabled = config.proxyStickySessionEnabled;
   const originalStickyTtlMs = config.proxyStickySessionTtlMs;
+  const originalStickyFailureThreshold = config.proxyStickyFailureThreshold;
   const originalConcurrencyLimit = config.proxySessionChannelConcurrencyLimit;
   const originalQueueWaitMs = config.proxySessionChannelQueueWaitMs;
   const originalLeaseTtlMs = config.proxySessionChannelLeaseTtlMs;
@@ -17,6 +18,7 @@ describe('proxyChannelCoordinator', () => {
     vi.useFakeTimers();
     config.proxyStickySessionEnabled = true;
     config.proxyStickySessionTtlMs = 31_000;
+    config.proxyStickyFailureThreshold = 5;
     config.proxySessionChannelConcurrencyLimit = 1;
     config.proxySessionChannelQueueWaitMs = 200;
     config.proxySessionChannelLeaseTtlMs = 100;
@@ -27,6 +29,7 @@ describe('proxyChannelCoordinator', () => {
   afterEach(() => {
     config.proxyStickySessionEnabled = originalStickyEnabled;
     config.proxyStickySessionTtlMs = originalStickyTtlMs;
+    config.proxyStickyFailureThreshold = originalStickyFailureThreshold;
     config.proxySessionChannelConcurrencyLimit = originalConcurrencyLimit;
     config.proxySessionChannelQueueWaitMs = originalQueueWaitMs;
     config.proxySessionChannelLeaseTtlMs = originalLeaseTtlMs;
@@ -81,6 +84,47 @@ describe('proxyChannelCoordinator', () => {
     });
 
     proxyChannelCoordinator.bindStickyChannel(key, 42, JSON.stringify({ credentialMode: 'apikey' }));
+    expect(proxyChannelCoordinator.getStickyChannelId(key)).toBe(42);
+  });
+
+  it('keeps sticky bindings until sticky failure threshold is reached', () => {
+    const key = proxyChannelCoordinator.buildStickySessionKey({
+      clientKind: 'claude_code',
+      sessionId: 'session-soft-failure',
+      requestedModel: 'claude-sonnet-4-6',
+      downstreamPath: '/v1/messages',
+      downstreamApiKeyId: 9,
+    });
+    proxyChannelCoordinator.bindStickyChannel(key, 42, JSON.stringify({ credentialMode: 'apikey' }));
+
+    for (let attempt = 1; attempt < 5; attempt += 1) {
+      const result = proxyChannelCoordinator.recordStickyFailure(key, 42);
+      expect(result.count).toBe(attempt);
+      expect(result.threshold).toBe(5);
+      expect(result.thresholdReached).toBe(false);
+      expect(proxyChannelCoordinator.getStickyChannelId(key)).toBe(42);
+    }
+
+    const finalResult = proxyChannelCoordinator.recordStickyFailure(key, 42);
+    expect(finalResult.count).toBe(5);
+    expect(finalResult.thresholdReached).toBe(true);
+  });
+
+  it('clears sticky failure counts when binding succeeds again', () => {
+    const key = proxyChannelCoordinator.buildStickySessionKey({
+      clientKind: 'claude_code',
+      sessionId: 'session-soft-failure-reset',
+      requestedModel: 'claude-sonnet-4-6',
+      downstreamPath: '/v1/messages',
+      downstreamApiKeyId: 9,
+    });
+    proxyChannelCoordinator.bindStickyChannel(key, 42, JSON.stringify({ credentialMode: 'apikey' }));
+    expect(proxyChannelCoordinator.recordStickyFailure(key, 42).count).toBe(1);
+
+    proxyChannelCoordinator.bindStickyChannel(key, 42, JSON.stringify({ credentialMode: 'apikey' }));
+
+    const afterSuccess = proxyChannelCoordinator.recordStickyFailure(key, 42);
+    expect(afterSuccess.count).toBe(1);
     expect(proxyChannelCoordinator.getStickyChannelId(key)).toBe(42);
   });
 

@@ -76,10 +76,10 @@ import {
   bindSurfaceStickyChannel,
   buildSurfaceChannelBusyMessage,
   buildSurfaceStickySessionKey,
-  clearSurfaceStickyChannel,
   createSurfaceFailureToolkit,
   createSurfaceDispatchRequest,
   getSurfaceStickyPreferredChannelId,
+  recordSurfaceStickyFailure,
   recordSurfaceSuccess,
   selectSurfaceChannelForAttempt,
   trySurfaceOauthRefreshRecovery,
@@ -345,18 +345,19 @@ export async function handleOpenAiResponsesSurfaceRequest(
     });
     const downstreamApiKeyId = getProxyAuthContext(request)?.keyId ?? null;
     const maxRetries = getProxyMaxChannelRetries();
+    const stickySessionKey = buildSurfaceStickySessionKey({
+      clientContext,
+      requestedModel,
+      downstreamPath,
+      downstreamApiKeyId,
+    });
     const failureToolkit = createSurfaceFailureToolkit({
       warningScope: 'responses',
       downstreamPath,
       maxRetries,
       clientContext,
       downstreamApiKeyId,
-    });
-    const stickySessionKey = buildSurfaceStickySessionKey({
-      clientContext,
-      requestedModel,
-      downstreamPath,
-      downstreamApiKeyId,
+      stickySessionKey,
     });
     const debugTrace = await startSurfaceProxyDebugTrace({
       downstreamPath,
@@ -863,24 +864,24 @@ export async function handleOpenAiResponsesSurfaceRequest(
         selected,
       });
       if (leaseResult.status === 'timeout') {
-        clearSurfaceStickyChannel({
+        recordSurfaceStickyFailure({
           stickySessionKey,
           selected,
         });
-      const busyMessage = buildSurfaceChannelBusyMessage(leaseResult.waitMs);
-      await failureToolkit.log({
-        selected,
-        modelRequested: requestedModel,
-        status: 'failed',
-        httpStatus: 503,
-        latencyMs: leaseResult.waitMs,
-        errorMessage: busyMessage,
-        retryCount,
-      });
-      if (retryCount < maxRetries && canRetryChannelSelection(retryCount, forcedChannelId)) {
-        retryCount += 1;
-        continue;
-      }
+        const busyMessage = buildSurfaceChannelBusyMessage(leaseResult.waitMs);
+        await failureToolkit.log({
+          selected,
+          modelRequested: requestedModel,
+          status: 'failed',
+          httpStatus: 503,
+          latencyMs: leaseResult.waitMs,
+          errorMessage: busyMessage,
+          retryCount,
+        });
+        if (retryCount < maxRetries && canRetryChannelSelection(retryCount, forcedChannelId)) {
+          retryCount += 1;
+          continue;
+        }
         await finalizeDebugFailure(503, {
           error: {
             message: busyMessage,
@@ -1004,10 +1005,6 @@ export async function handleOpenAiResponsesSurfaceRequest(
               );
               const latency = Date.now() - startTime;
 	              if (streamResult.status === 'failed') {
-	                clearSurfaceStickyChannel({
-	                  stickySessionKey,
-	                  selected,
-	                });
               await failureToolkit.recordStreamFailure({
 	                  selected,
 	                  requestedModel,
@@ -1059,10 +1056,6 @@ export async function handleOpenAiResponsesSurfaceRequest(
             const latency = Date.now() - startTime;
             const failure = detectProxyFailure({ rawText, usage: parsedUsage });
 	            if (failure) {
-	              clearSurfaceStickyChannel({
-	                stickySessionKey,
-	                selected,
-	              });
 	              const failureOutcome = await failureToolkit.handleDetectedFailure({
 	                selected,
 	                requestedModel,
@@ -1095,10 +1088,6 @@ export async function handleOpenAiResponsesSurfaceRequest(
             startSseResponse();
             const streamResult = streamSession.consumeUpstreamFinalPayload(upstreamData, rawText, reply.raw);
 	            if (streamResult.status === 'failed') {
-	              clearSurfaceStickyChannel({
-	                stickySessionKey,
-	                selected,
-	              });
               await failureToolkit.recordStreamFailure({
 	                selected,
 	                requestedModel,
@@ -1246,10 +1235,6 @@ export async function handleOpenAiResponsesSurfaceRequest(
 
           const latency = Date.now() - startTime;
 	          if (streamResult.status === 'failed') {
-	            clearSurfaceStickyChannel({
-	              stickySessionKey,
-	              selected,
-	            });
 	            await failureToolkit.recordStreamFailure({
 	              selected,
 	              requestedModel,
@@ -1327,10 +1312,6 @@ export async function handleOpenAiResponsesSurfaceRequest(
         const upstreamUsagePresent = hasProxyUsagePayload(upstreamData);
         const failure = detectProxyFailure({ rawText, usage: parsedUsage });
 	        if (failure) {
-	          clearSurfaceStickyChannel({
-	            stickySessionKey,
-	            selected,
-	          });
 	          const failureOutcome = await failureToolkit.handleDetectedFailure({
 	            selected,
 	            requestedModel,
@@ -1407,10 +1388,6 @@ export async function handleOpenAiResponsesSurfaceRequest(
 	        });
 	        return reply.send(downstreamData);
 	      } catch (err: any) {
-	        clearSurfaceStickyChannel({
-	          stickySessionKey,
-	          selected,
-	        });
           const endpointFailureStatus = typeof err?.status === 'number' ? err.status : null;
           const isSiteApiEndpointFailure = (
             err instanceof SiteApiEndpointRequestError
