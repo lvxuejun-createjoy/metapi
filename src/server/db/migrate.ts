@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { assertSafeSqlitePath, resolveSqlitePathFromConfig } from './sqlitePathSafety.js';
 
 type MigrationJournalEntry = {
   tag: string;
@@ -87,17 +88,7 @@ const VERIFIED_SCHEMA_MARKERS: SchemaMarker[] = [
 
 
 function resolveSqliteDbPath(): string {
-  const raw = (config.dbUrl || '').trim();
-  if (!raw) return resolve(`${config.dataDir}/hub.db`);
-  if (raw === ':memory:') return raw;
-  if (raw.startsWith('file://')) {
-    const parsed = new URL(raw);
-    return decodeURIComponent(parsed.pathname);
-  }
-  if (raw.startsWith('sqlite://')) {
-    return resolve(raw.slice('sqlite://'.length).trim());
-  }
-  return resolve(raw);
+  return resolveSqlitePathFromConfig(config);
 }
 
 function resolveMigrationsFolder(): string {
@@ -680,6 +671,7 @@ function bootstrapLegacyDrizzleMigrations(sqlite: Database.Database, migrationsF
 
 export function runSqliteMigrations(): void {
   const dbPath = resolveSqliteDbPath();
+  assertSafeSqlitePath(dbPath);
   const migrationsFolder = resolveMigrationsFolder();
   if (dbPath !== ':memory:') {
     mkdirSync(dirname(dbPath), { recursive: true });

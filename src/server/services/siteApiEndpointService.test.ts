@@ -205,7 +205,7 @@ describe('siteApiEndpointService', () => {
     expect(selected).toBeNull();
   });
 
-  it('records retryable failures with a 5-minute cooldown', async () => {
+  it('records retryable failures without cooldown until the failure threshold is reached', async () => {
     const site = await db.insert(schema.sites).values({
       name: 'retryable-site',
       url: 'https://panel.example.com',
@@ -220,7 +220,7 @@ describe('siteApiEndpointService', () => {
       sortOrder: 0,
     }).returning().get();
 
-    const result = await recordSiteApiEndpointFailure(endpoint.id, {
+    let result = await recordSiteApiEndpointFailure(endpoint.id, {
       status: 502,
       message: 'Bad gateway',
     }, '2026-03-31T12:00:00.000Z');
@@ -228,16 +228,51 @@ describe('siteApiEndpointService', () => {
     expect(result).toMatchObject({
       retryable: true,
       rotateToNextEndpoint: true,
-      cooldownUntil: '2026-03-31T12:05:00.000Z',
+      cooldownUntil: null,
       failureReason: 'HTTP 502: Bad gateway',
     });
 
-    const stored = await db.select().from(schema.siteApiEndpoints)
+    let stored = await db.select().from(schema.siteApiEndpoints)
       .where(eq(schema.siteApiEndpoints.id, endpoint.id))
       .get();
     expect(stored).toMatchObject({
-      cooldownUntil: '2026-03-31T12:05:00.000Z',
+      cooldownUntil: null,
       lastFailedAt: '2026-03-31T12:00:00.000Z',
+      lastFailureReason: 'HTTP 502: Bad gateway',
+    });
+
+    for (let attempt = 2; attempt <= 4; attempt += 1) {
+      result = await recordSiteApiEndpointFailure(endpoint.id, {
+        status: 502,
+        message: 'Bad gateway',
+      }, `2026-03-31T12:00:0${attempt}.000Z`);
+
+      expect(result).toMatchObject({
+        retryable: true,
+        rotateToNextEndpoint: true,
+        cooldownUntil: null,
+        failureReason: 'HTTP 502: Bad gateway',
+      });
+    }
+
+    result = await recordSiteApiEndpointFailure(endpoint.id, {
+      status: 502,
+      message: 'Bad gateway',
+    }, '2026-03-31T12:00:05.000Z');
+
+    expect(result).toMatchObject({
+      retryable: true,
+      rotateToNextEndpoint: true,
+      cooldownUntil: '2026-03-31T12:05:05.000Z',
+      failureReason: 'HTTP 502: Bad gateway',
+    });
+
+    stored = await db.select().from(schema.siteApiEndpoints)
+      .where(eq(schema.siteApiEndpoints.id, endpoint.id))
+      .get();
+    expect(stored).toMatchObject({
+      cooldownUntil: '2026-03-31T12:05:05.000Z',
+      lastFailedAt: '2026-03-31T12:00:05.000Z',
       lastFailureReason: 'HTTP 502: Bad gateway',
     });
   });
@@ -257,14 +292,17 @@ describe('siteApiEndpointService', () => {
       sortOrder: 0,
     }).returning().get();
 
-    const result = await recordSiteApiEndpointFailure(endpoint.id, {
-      message: 'HTTP 502: upstream temporarily unavailable',
-    }, '2026-03-31T12:00:00.000Z');
+    let result = null as Awaited<ReturnType<typeof recordSiteApiEndpointFailure>> | null;
+    for (let attempt = 1; attempt <= 5; attempt += 1) {
+      result = await recordSiteApiEndpointFailure(endpoint.id, {
+        message: 'HTTP 502: upstream temporarily unavailable',
+      }, `2026-03-31T12:00:0${attempt}.000Z`);
+    }
 
     expect(result).toMatchObject({
       retryable: true,
       rotateToNextEndpoint: true,
-      cooldownUntil: '2026-03-31T12:05:00.000Z',
+      cooldownUntil: '2026-03-31T12:05:05.000Z',
       failureReason: 'HTTP 502: upstream temporarily unavailable',
     });
   });
@@ -335,6 +373,44 @@ describe('siteApiEndpointService', () => {
       cooldownUntil: null,
       lastSelectedAt: '2026-03-31T12:01:00.000Z',
       lastFailureReason: null,
+    });
+  });
+
+  it('clears retryable failure count after a recorded success', async () => {
+    const site = await db.insert(schema.sites).values({
+      name: 'success-reset-site',
+      url: 'https://panel.example.com',
+      platform: 'new-api',
+      status: 'active',
+    }).returning().get();
+
+    const endpoint = await db.insert(schema.siteApiEndpoints).values({
+      siteId: site.id,
+      url: 'https://api-success-reset.example.com',
+      enabled: true,
+      sortOrder: 0,
+    }).returning().get();
+
+    for (let attempt = 1; attempt <= 4; attempt += 1) {
+      await recordSiteApiEndpointFailure(endpoint.id, {
+        status: 502,
+        message: 'Bad gateway',
+      }, `2026-03-31T12:00:0${attempt}.000Z`);
+    }
+
+    await recordSiteApiEndpointSuccess(endpoint.id, '2026-03-31T12:01:00.000Z');
+
+    const result = await recordSiteApiEndpointFailure(endpoint.id, {
+      status: 502,
+      message: 'Bad gateway',
+    }, '2026-03-31T12:02:00.000Z');
+
+    expect(result).toMatchObject({
+      retryable: true,
+      rotateToNextEndpoint: true,
+      cooldownUntil: null,
+      failureCount: 1,
+      thresholdReached: false,
     });
   });
 });

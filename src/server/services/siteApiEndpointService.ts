@@ -1,4 +1,5 @@
 import { asc, eq } from 'drizzle-orm';
+import { config } from '../config.js';
 import { db, schema } from '../db/index.js';
 import { RETRYABLE_TIMEOUT_PATTERNS } from './proxyRetryPolicy.js';
 
@@ -17,6 +18,7 @@ const NETWORK_FAILURE_PATTERNS = [
 ];
 
 export const SITE_API_ENDPOINT_COOLDOWN_MS = 5 * 60 * 1000;
+const endpointFailureCounts = new Map<number, number>();
 
 type SiteRow = typeof schema.sites.$inferSelect;
 type SiteApiEndpointRow = typeof schema.siteApiEndpoints.$inferSelect;
@@ -44,6 +46,9 @@ export interface SiteApiEndpointFailureDisposition {
 
 export interface RecordedSiteApiEndpointFailure extends SiteApiEndpointFailureDisposition {
   cooldownUntil: string | null;
+  failureCount: number;
+  failureThreshold: number;
+  thresholdReached: boolean;
 }
 
 export class SiteApiEndpointRequestError extends Error {
@@ -152,9 +157,10 @@ export function classifySiteApiEndpointFailure(
 export async function selectSiteApiEndpointTarget(
   site: SiteRow,
   now?: string | Date,
+  excludedEndpointIds?: ReadonlySet<number>,
 ): Promise<SiteApiEndpointTarget | null> {
   const nowIso = toIsoTimestamp(now);
-  const endpoints = await db.select().from(schema.siteApiEndpoints)
+  const endpoints: SiteApiEndpointRow[] = await db.select().from(schema.siteApiEndpoints)
     .where(eq(schema.siteApiEndpoints.siteId, site.id))
     .orderBy(asc(schema.siteApiEndpoints.sortOrder), asc(schema.siteApiEndpoints.id))
     .all();
@@ -171,7 +177,11 @@ export async function selectSiteApiEndpointTarget(
   }
 
   const eligible = endpoints
-    .filter((endpoint) => (endpoint.enabled ?? true) && !isEndpointCoolingDown(endpoint, nowIso))
+    .filter((endpoint) => (
+      (endpoint.enabled ?? true)
+      && !excludedEndpointIds?.has(endpoint.id)
+      && !isEndpointCoolingDown(endpoint, nowIso)
+    ))
     .sort((left, right) => {
       const sortOrder = (left.sortOrder ?? 0) - (right.sortOrder ?? 0);
       if (sortOrder !== 0) return sortOrder;
@@ -217,9 +227,19 @@ export async function recordSiteApiEndpointFailure(
 ): Promise<RecordedSiteApiEndpointFailure> {
   const nowIso = toIsoTimestamp(now);
   const disposition = classifySiteApiEndpointFailure(input);
-  const cooldownUntil = disposition.retryable
+  const failureThreshold = config.siteApiEndpointFailureThreshold;
+  const failureCount = disposition.retryable
+    ? (endpointFailureCounts.get(endpointId) ?? 0) + 1
+    : 0;
+  const thresholdReached = disposition.retryable && failureCount >= failureThreshold;
+  const cooldownUntil = thresholdReached
     ? new Date(Date.parse(nowIso) + SITE_API_ENDPOINT_COOLDOWN_MS).toISOString()
     : null;
+  if (thresholdReached || !disposition.retryable) {
+    endpointFailureCounts.delete(endpointId);
+  } else {
+    endpointFailureCounts.set(endpointId, failureCount);
+  }
 
   await db.update(schema.siteApiEndpoints).set({
     cooldownUntil,
@@ -230,7 +250,11 @@ export async function recordSiteApiEndpointFailure(
 
   return {
     ...disposition,
+    rotateToNextEndpoint: disposition.rotateToNextEndpoint,
     cooldownUntil,
+    failureCount,
+    failureThreshold,
+    thresholdReached,
   };
 }
 
@@ -239,6 +263,7 @@ export async function recordSiteApiEndpointSuccess(
   now?: string | Date,
 ): Promise<void> {
   const nowIso = toIsoTimestamp(now);
+  endpointFailureCounts.delete(endpointId);
   await db.update(schema.siteApiEndpoints).set({
     cooldownUntil: null,
     lastSelectedAt: nowIso,
@@ -255,7 +280,7 @@ export async function runWithSiteApiEndpointPool<T>(
   let lastError: unknown;
 
   while (true) {
-    const target = await selectSiteApiEndpointTarget(site);
+    const target = await selectSiteApiEndpointTarget(site, undefined, attemptedEndpointIds);
     if (!target) {
       if (lastError) throw lastError;
       throw new Error('当前站点的 API 请求地址均不可用');

@@ -49,6 +49,16 @@ describe('buildConfig', () => {
     }).proxyStickyFailureThreshold).toBe(1);
   });
 
+  it('defaults site api endpoint failure threshold to five and allows overriding it', () => {
+    expect(buildConfig({}).siteApiEndpointFailureThreshold).toBe(5);
+    expect(buildConfig({
+      SITE_API_ENDPOINT_FAILURE_THRESHOLD: '7',
+    }).siteApiEndpointFailureThreshold).toBe(7);
+    expect(buildConfig({
+      SITE_API_ENDPOINT_FAILURE_THRESHOLD: '0',
+    }).siteApiEndpointFailureThreshold).toBe(1);
+  });
+
   it('accepts telegram message thread id from environment', () => {
     const config = buildConfig({
       TELEGRAM_MESSAGE_THREAD_ID: '77',

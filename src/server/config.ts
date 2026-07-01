@@ -127,6 +127,7 @@ export function buildConfig(env: NodeJS.ProcessEnv) {
     proxyStickySessionEnabled: parseBoolean(env.PROXY_STICKY_SESSION_ENABLED, true),
     proxyStickySessionTtlMs: Math.max(30_000, Math.trunc(parseNumber(env.PROXY_STICKY_SESSION_TTL_MS, 30 * 60 * 1000))),
     proxyStickyFailureThreshold: Math.max(1, Math.trunc(parseNumber(env.PROXY_STICKY_FAILURE_THRESHOLD, 5))),
+    siteApiEndpointFailureThreshold: Math.max(1, Math.trunc(parseNumber(env.SITE_API_ENDPOINT_FAILURE_THRESHOLD, 5))),
     proxySessionChannelConcurrencyLimit: Math.max(0, Math.trunc(parseNumber(env.PROXY_SESSION_CHANNEL_CONCURRENCY_LIMIT, 2))),
     proxySessionChannelQueueWaitMs: Math.max(0, Math.trunc(parseNumber(env.PROXY_SESSION_CHANNEL_QUEUE_WAIT_MS, 1_500))),
     proxySessionChannelLeaseTtlMs: Math.max(5_000, Math.trunc(parseNumber(env.PROXY_SESSION_CHANNEL_LEASE_TTL_MS, 90_000))),

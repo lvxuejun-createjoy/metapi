@@ -216,7 +216,7 @@ describe('/v1/completions site api endpoint rotation', () => {
       url: 'https://api-a.example.com',
       lastFailureReason: 'HTTP 502: bad gateway',
     });
-    expect(storedEndpoints[0]?.cooldownUntil).toBeTruthy();
+    expect(storedEndpoints[0]?.cooldownUntil).toBeNull();
     expect(storedEndpoints[1]).toMatchObject({
       url: 'https://api-b.example.com',
     });

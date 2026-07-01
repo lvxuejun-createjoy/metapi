@@ -55,4 +55,30 @@ describe('sqlite default path resolution', () => {
     expect(sqlitePath).toContain(tmpdir());
     expect(sqlitePath).toContain('metapi-vitest');
   });
+
+  it('ignores a cached default config data dir under vitest', async () => {
+    delete process.env.DATA_DIR;
+    delete process.env.DB_URL;
+    vi.resetModules();
+
+    const configModule = await import('../config.js');
+    expect(configModule.config.dataDir).toBe('./data');
+
+    process.env.DATA_DIR = './data';
+    dbModule = await import('./index.js');
+    const sqlitePath = dbModule.__dbProxyTestUtils.resolveSqlitePath();
+    const sharedRepoPath = resolve('./data/hub.db');
+
+    expect(sqlitePath).not.toBe(sharedRepoPath);
+    expect(sqlitePath).toContain(tmpdir());
+    expect(sqlitePath).toContain('metapi-vitest');
+  });
+
+  it('rejects the repository hub database under vitest even when explicitly requested', async () => {
+    delete process.env.DATA_DIR;
+    process.env.DB_URL = resolve('./data/hub.db');
+    vi.resetModules();
+
+    await expect(import('./index.js')).rejects.toThrow(/Refusing to use the repository data database during Vitest/);
+  });
 });
