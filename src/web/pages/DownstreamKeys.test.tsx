@@ -239,8 +239,71 @@ describe('DownstreamKeys page', () => {
       expect(text).toContain('sk-s****0315');
       expect(text).toContain('默认群组');
       expect(text).toContain('4.2K');
+      expect(text).toContain('成本 $0.420000');
       expect(text).toContain('主分组');
       expect(text).toContain('移动端');
+    } finally {
+      root?.unmount();
+    }
+  });
+
+  it('updates row usage cost when the selected range changes', async () => {
+    apiMock.getDownstreamApiKeysSummary.mockImplementation(async (params?: { range?: string }) => {
+      if (params?.range === '7d') {
+        return {
+          success: true,
+          items: [buildSummaryItem({
+            rangeUsage: {
+              totalRequests: 9,
+              successRequests: 8,
+              failedRequests: 1,
+              successRate: 88.9,
+              totalTokens: 12400,
+              totalCost: 1.24,
+            },
+          })],
+        };
+      }
+      return {
+        success: true,
+        items: [buildSummaryItem({
+          rangeUsage: {
+            totalRequests: 3,
+            successRequests: 2,
+            failedRequests: 1,
+            successRate: 66.7,
+            totalTokens: 4200,
+            totalCost: 0.42,
+          },
+        })],
+      };
+    });
+
+    let root!: WebTestRenderer;
+    try {
+      await act(async () => {
+        root = create(
+          <MemoryRouter initialEntries={['/downstream-keys']}>
+            <ToastProvider>
+              <DownstreamKeys />
+            </ToastProvider>
+          </MemoryRouter>,
+        );
+      });
+      await flushMicrotasks();
+
+      expect(collectText(root!.root)).toContain('成本 $0.420000');
+
+      const range7d = root!.root.findAll((node) => node.type === 'button' && collectText(node) === '7d')[0];
+      await act(async () => {
+        range7d.props.onClick();
+      });
+      await flushMicrotasks();
+
+      expect(apiMock.getDownstreamApiKeysSummary).toHaveBeenLastCalledWith({ range: '7d' });
+      const text = collectText(root!.root);
+      expect(text).toContain('成本 $1.240');
+      expect(text).not.toContain('成本 $0.420000');
     } finally {
       root?.unmount();
     }

@@ -85,6 +85,14 @@ import {
   canRetryChannelSelection,
   getTesterForcedChannelId,
 } from '../channelSelection.js';
+import {
+  createSurfaceSafetyStreamGuard,
+  ProxySafetyBlockedError,
+  reviewSurfaceRequestPayload,
+  reviewSurfaceResponseText,
+  sendSafetyBlockedReply,
+  writeSafetyBlockedSse,
+} from '../safety/surface.js';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
@@ -440,6 +448,18 @@ export async function handleChatSurfaceRequest(
           runtime: endpointRequest.runtime,
         };
       };
+      const buildReviewedEndpointRequest = (
+        endpoint: 'chat' | 'messages' | 'responses',
+        options: { forceNormalizeClaudeBody?: boolean } = {},
+      ) => {
+        const endpointRequest = buildEndpointRequest(endpoint, options);
+        reviewSurfaceRequestPayload(endpointRequest.body, {
+          model: modelName,
+          channelId: selected.channel.id,
+          sessionId: clientContext.sessionId || null,
+        });
+        return endpointRequest;
+      };
       const dispatchRequest = createSurfaceDispatchRequest({
         site: selected.site,
         siteUrl: siteApiBaseUrl,
@@ -452,7 +472,7 @@ export async function handleChatSurfaceRequest(
         requestedModelHint: requestedModel,
         sitePlatform: selected.site.platform,
         isStream: isStream || forceResponsesUpstreamStream,
-        buildRequest: ({ endpoint, forceNormalizeClaudeBody }) => buildEndpointRequest(
+        buildRequest: ({ endpoint, forceNormalizeClaudeBody }) => buildReviewedEndpointRequest(
           endpoint,
           { forceNormalizeClaudeBody },
         ),
@@ -479,7 +499,7 @@ export async function handleChatSurfaceRequest(
         disableCrossProtocolFallback: config.disableCrossProtocolFallback,
         firstByteTimeoutMs: Math.max(0, Math.trunc((config.proxyFirstByteTimeoutSec || 0) * 1000)),
         endpointCandidates,
-        buildRequest: (endpoint) => buildEndpointRequest(endpoint),
+        buildRequest: (endpoint) => buildReviewedEndpointRequest(endpoint),
         dispatchRequest,
         tryRecover,
         shouldAbortRemainingEndpoints: (ctx) => shouldAbortSameSiteEndpointFallback(
@@ -662,7 +682,21 @@ export async function handleChatSurfaceRequest(
           });
         };
 
+        const safetyStreamGuard = createSurfaceSafetyStreamGuard({
+          model: modelName,
+          channelId: selected.channel.id,
+          sessionId: clientContext.sessionId || null,
+        });
+        const reviewStreamChunk = (chunk: string | Uint8Array) => {
+          const chunkText = typeof chunk === 'string'
+            ? chunk
+            : new TextDecoder().decode(chunk);
+          safetyStreamGuard.reviewChunk(chunkText);
+        };
         const writeLines = (lines: string[]) => {
+          for (const line of lines) {
+            reviewStreamChunk(line);
+          }
           startSseResponse();
           for (const line of lines) {
             reply.raw.write(line);
@@ -674,6 +708,19 @@ export async function handleChatSurfaceRequest(
               reply.raw.end();
             }
           },
+        };
+        const handleBlockedStreamSafety = async () => {
+          const safetyError = safetyStreamGuard.getBlockedError();
+          if (!safetyError) return false;
+          await finalizeDebugFailure(403, safetyError.payload, successfulUpstreamPath);
+          if (!streamStarted) {
+            return sendSafetyBlockedReply(reply, safetyError);
+          }
+          if (!reply.raw.writableEnded) {
+            writeSafetyBlockedSse(reply, safetyError);
+            reply.raw.end();
+          }
+          return true;
         };
         const streamSession = openAiChatTransformer.proxyStream.createSession({
           downstreamFormat,
@@ -687,6 +734,7 @@ export async function handleChatSurfaceRequest(
           },
           writeLines,
           writeRaw: (chunk) => {
+            reviewStreamChunk(chunk);
             startSseResponse();
             reply.raw.write(chunk);
           },
@@ -702,6 +750,7 @@ export async function handleChatSurfaceRequest(
             );
             const latency = Date.now() - startTime;
             if (streamResult.status === 'failed') {
+              if (await handleBlockedStreamSafety()) return;
               await failureToolkit.recordStreamFailure({
                 selected,
                 requestedModel,
@@ -731,6 +780,7 @@ export async function handleChatSurfaceRequest(
               return;
             }
             await recordStreamSuccess(latency);
+            safetyStreamGuard.flushAllowed();
             await finalizeDebugSuccess(
               200,
               successfulUpstreamPath,
@@ -793,6 +843,7 @@ export async function handleChatSurfaceRequest(
 
           const streamResult = streamSession.consumeUpstreamFinalPayload(fallbackData, fallbackText, streamResponse);
           if (streamResult.status === 'failed') {
+            if (await handleBlockedStreamSafety()) return;
             await failureToolkit.recordStreamFailure({
               selected,
               requestedModel,
@@ -823,6 +874,7 @@ export async function handleChatSurfaceRequest(
             return;
           }
           await recordStreamSuccess(latency);
+          safetyStreamGuard.flushAllowed();
           await finalizeDebugSuccess(
             200,
             successfulUpstreamPath,
@@ -867,6 +919,7 @@ export async function handleChatSurfaceRequest(
 
           const latency = Date.now() - startTime;
           if (streamResult.status === 'failed') {
+            if (await handleBlockedStreamSafety()) return;
             await failureToolkit.recordStreamFailure({
               selected,
               requestedModel,
@@ -905,6 +958,7 @@ export async function handleChatSurfaceRequest(
 
         const latency = Date.now() - startTime;
         await recordStreamSuccess(latency);
+        safetyStreamGuard.flushAllowed();
         await finalizeDebugSuccess(
           200,
           successfulUpstreamPath,
@@ -982,6 +1036,11 @@ export async function handleChatSurfaceRequest(
       }
       const normalizedFinal = downstreamTransformer.transformFinalResponse(upstreamData, modelName, rawText);
       const downstreamResponse = downstreamTransformer.serializeFinalResponse(normalizedFinal, parsedUsage);
+      reviewSurfaceResponseText(JSON.stringify(downstreamResponse), {
+        model: modelName,
+        channelId: selected.channel.id,
+        sessionId: clientContext.sessionId || null,
+      });
 
       await recordSurfaceSuccess({
         selected,
@@ -1017,6 +1076,16 @@ export async function handleChatSurfaceRequest(
 
       return reply.send(downstreamResponse);
     } catch (err: any) {
+      if (err instanceof ProxySafetyBlockedError || err?.name === 'ProxySafetyBlockedError') {
+        const safetyError = err as ProxySafetyBlockedError;
+        await finalizeDebugFailure(403, safetyError.payload, null);
+        if (isStream && reply.raw.headersSent && !reply.raw.writableEnded) {
+          writeSafetyBlockedSse(reply, safetyError);
+          reply.raw.end();
+          return;
+        }
+        return sendSafetyBlockedReply(reply, safetyError);
+      }
       const endpointFailureStatus = typeof err?.status === 'number' ? err.status : null;
       const isSiteApiEndpointFailure = (
         err instanceof SiteApiEndpointRequestError

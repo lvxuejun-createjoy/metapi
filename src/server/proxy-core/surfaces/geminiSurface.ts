@@ -61,6 +61,14 @@ import {
   canRetryChannelSelection,
   getTesterForcedChannelId,
 } from '../channelSelection.js';
+import {
+  createSurfaceSafetyStreamGuard,
+  ProxySafetyBlockedError,
+  reviewSurfaceRequestPayload,
+  reviewSurfaceResponseText,
+  sendSafetyBlockedReply,
+  writeSafetyBlockedSse,
+} from '../safety/surface.js';
 const GEMINI_MODEL_PROBES = [
   'gemini-2.5-flash',
   'gemini-2.0-flash',
@@ -751,6 +759,11 @@ export async function geminiProxyRoute(app: FastifyInstance) {
           };
 
           let directDispatchState = buildDirectDispatchState();
+          reviewSurfaceRequestPayload(directDispatchState.requestBody, {
+            model: actualModel,
+            channelId: selected.channel.id,
+            sessionId: clientContext.sessionId || null,
+          });
           const dispatchWithObservedFirstByte = async () => fetchWithObservedFirstByte(
             (signal) => directDispatchState.dispatch(signal),
             {
@@ -895,6 +908,11 @@ export async function geminiProxyRoute(app: FastifyInstance) {
             reply.raw.statusCode = upstream.status;
             reply.raw.setHeader('Content-Type', contentType || 'text/event-stream');
             const aggregateState = geminiGenerateContentTransformer.stream.createAggregateState();
+            const safetyStreamGuard = createSurfaceSafetyStreamGuard({
+              model: actualModel,
+              channelId: selected.channel.id,
+              sessionId: clientContext.sessionId || null,
+            });
             const decoder = new TextDecoder();
             let rest = '';
             let rawStreamText = '';
@@ -913,6 +931,7 @@ export async function geminiProxyRoute(app: FastifyInstance) {
                 );
                 rest = consumed.rest;
                 for (const line of consumed.lines) {
+                  safetyStreamGuard.reviewChunk(line);
                   reply.raw.write(line);
                 }
               }
@@ -926,6 +945,7 @@ export async function geminiProxyRoute(app: FastifyInstance) {
                   rest + tail,
                 );
                 for (const line of consumed.lines) {
+                  safetyStreamGuard.reviewChunk(line);
                   reply.raw.write(line);
                 }
               }
@@ -975,8 +995,17 @@ export async function geminiProxyRoute(app: FastifyInstance) {
                 buildSurfaceProxyDebugResponseHeaders(upstream),
                 responseBody,
               );
+              safetyStreamGuard.flushAllowed();
               return;
             } catch (error) {
+              if (error instanceof ProxySafetyBlockedError || (error as any)?.name === 'ProxySafetyBlockedError') {
+                const safetyError = error as ProxySafetyBlockedError;
+                await finalizeDebugFailure(403, safetyError.payload, upstreamPath);
+                if (!reply.raw.writableEnded) {
+                  writeSafetyBlockedSse(reply, safetyError);
+                }
+                return;
+              }
               const latency = Date.now() - startTime;
               const errorMessage = error instanceof Error
                 ? error.message
@@ -1097,6 +1126,15 @@ export async function geminiProxyRoute(app: FastifyInstance) {
                 ? { response: responsePayload }
                 : responsePayload,
             );
+            reviewSurfaceResponseText(JSON.stringify(
+              isGeminiCliDownstream && !isCountTokensAction
+                ? { response: responsePayload }
+                : responsePayload,
+            ), {
+              model: actualModel,
+              channelId: selected.channel.id,
+              sessionId: clientContext.sessionId || null,
+            });
             return reply.code(upstream.status).send(
               isGeminiCliDownstream && !isCountTokensAction
                 ? { response: responsePayload }
@@ -1145,6 +1183,11 @@ export async function geminiProxyRoute(app: FastifyInstance) {
               buildSurfaceProxyDebugResponseHeaders(upstream),
               text,
             );
+            reviewSurfaceResponseText(text, {
+              model: actualModel,
+              channelId: selected.channel.id,
+              sessionId: clientContext.sessionId || null,
+            });
             return reply.code(upstream.status).type(contentType || 'application/json').send(text);
           }
         }
@@ -1238,6 +1281,18 @@ export async function geminiProxyRoute(app: FastifyInstance) {
             runtime: endpointRequest.runtime,
           };
         };
+        const buildReviewedEndpointRequest = (
+          endpoint: 'chat' | 'messages' | 'responses',
+          requestOptions: { forceNormalizeClaudeBody?: boolean } = {},
+        ) => {
+          const endpointRequest = buildEndpointRequest(endpoint, requestOptions);
+          reviewSurfaceRequestPayload(endpointRequest.body, {
+            model: actualModel,
+            channelId: selected.channel.id,
+            sessionId: clientContext.sessionId || null,
+          });
+          return endpointRequest;
+        };
         const channelProxyUrl = resolveChannelProxyUrl(selected.site, selected.account.extraConfig);
         const dispatchRequest = (
           compatibilityRequest: BuiltEndpointRequest,
@@ -1263,7 +1318,7 @@ export async function geminiProxyRoute(app: FastifyInstance) {
           requestedModelHint: requestedModel,
           sitePlatform: selected.site.platform,
           isStream: isStreamAction,
-          buildRequest: ({ endpoint, forceNormalizeClaudeBody }) => buildEndpointRequest(
+          buildRequest: ({ endpoint, forceNormalizeClaudeBody }) => buildReviewedEndpointRequest(
             endpoint,
             { forceNormalizeClaudeBody },
           ),
@@ -1275,7 +1330,7 @@ export async function geminiProxyRoute(app: FastifyInstance) {
           disableCrossProtocolFallback: config.disableCrossProtocolFallback,
           firstByteTimeoutMs,
           endpointCandidates,
-          buildRequest: (endpoint) => buildEndpointRequest(endpoint),
+          buildRequest: (endpoint) => buildReviewedEndpointRequest(endpoint),
           dispatchRequest,
           tryRecover: endpointStrategy.tryRecover,
           shouldAbortRemainingEndpoints: (ctx) => shouldAbortSameSiteEndpointFallback(
@@ -1420,6 +1475,11 @@ export async function geminiProxyRoute(app: FastifyInstance) {
         const downstreamPayload = isGeminiCliDownstream
           ? { response: geminiResponse }
           : geminiResponse;
+        reviewSurfaceResponseText(JSON.stringify(downstreamPayload), {
+          model: actualModel,
+          channelId: selected.channel.id,
+          sessionId: clientContext.sessionId || null,
+        });
         await finalizeDebugSuccess(
           upstream.status,
           upstreamPath,
@@ -1436,6 +1496,16 @@ export async function geminiProxyRoute(app: FastifyInstance) {
         }
         return reply.code(upstream.status).send(downstreamPayload);
       } catch (error) {
+        if (error instanceof ProxySafetyBlockedError || (error as any)?.name === 'ProxySafetyBlockedError') {
+          const safetyError = error as ProxySafetyBlockedError;
+          await finalizeDebugFailure(403, safetyError.payload, upstreamPath || null);
+          if (isStreamAction && reply.raw.headersSent && !reply.raw.writableEnded) {
+            writeSafetyBlockedSse(reply, safetyError);
+            reply.raw.end();
+            return;
+          }
+          return sendSafetyBlockedReply(reply, safetyError);
+        }
         lastStatus = 502;
         lastContentType = 'application/json';
         lastText = JSON.stringify({

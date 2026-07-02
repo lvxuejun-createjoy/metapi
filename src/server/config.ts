@@ -34,6 +34,20 @@ function parseOptionalSecret(value: string | undefined): string {
   return (value || '').trim();
 }
 
+function parseProxySafetyAuditDestination(value: string | undefined): 'console' | 'file' | 'both' {
+  const normalized = (value || 'console').trim().toLowerCase();
+  if (normalized === 'file') return 'file';
+  if (normalized === 'both') return 'both';
+  return 'console';
+}
+
+function parseProxySafetyAuditFileSplit(value: string | undefined): 'daily' | 'daily-direction' | 'daily-session' {
+  const normalized = (value || 'daily-session').trim().toLowerCase();
+  if (normalized === 'daily') return 'daily';
+  if (normalized === 'daily-session') return 'daily-session';
+  return 'daily-direction';
+}
+
 function parseJsonValue(value: string | undefined): unknown {
   if (!value) return undefined;
   try {
@@ -132,6 +146,22 @@ export function buildConfig(env: NodeJS.ProcessEnv) {
     proxySessionChannelQueueWaitMs: Math.max(0, Math.trunc(parseNumber(env.PROXY_SESSION_CHANNEL_QUEUE_WAIT_MS, 1_500))),
     proxySessionChannelLeaseTtlMs: Math.max(5_000, Math.trunc(parseNumber(env.PROXY_SESSION_CHANNEL_LEASE_TTL_MS, 90_000))),
     proxySessionChannelLeaseKeepaliveMs: Math.max(1_000, Math.trunc(parseNumber(env.PROXY_SESSION_CHANNEL_LEASE_KEEPALIVE_MS, 15_000))),
+    proxySafetyReviewEnabled: parseBoolean(env.PROXY_SAFETY_REVIEW_ENABLED, false),
+    proxySafetyRequestEnabled: parseBoolean(env.PROXY_SAFETY_REVIEW_REQUEST_ENABLED, true),
+    proxySafetyResponseEnabled: parseBoolean(env.PROXY_SAFETY_REVIEW_RESPONSE_ENABLED, true),
+    proxySafetyBlockSecrets: parseBoolean(env.PROXY_SAFETY_REVIEW_BLOCK_SECRETS, true),
+    proxySafetyBlockEnvFiles: parseBoolean(env.PROXY_SAFETY_REVIEW_BLOCK_ENV_FILES, true),
+    proxySafetyBlockDangerousCommands: parseBoolean(env.PROXY_SAFETY_REVIEW_BLOCK_DANGEROUS_COMMANDS, true),
+    proxySafetyStreamWindowChars: Math.max(1024, Math.trunc(parseNumber(env.PROXY_SAFETY_REVIEW_STREAM_WINDOW_CHARS, 8192))),
+    proxySafetyAuditEnabled: parseBoolean(env.PROXY_SAFETY_AUDIT_ENABLED, false),
+    proxySafetyAuditLogRequests: parseBoolean(env.PROXY_SAFETY_AUDIT_LOG_REQUESTS, true),
+    proxySafetyAuditLogResponses: parseBoolean(env.PROXY_SAFETY_AUDIT_LOG_RESPONSES, true),
+    proxySafetyAuditLogFullBody: parseBoolean(env.PROXY_SAFETY_AUDIT_LOG_FULL_BODY, false),
+    proxySafetyAuditRedactSecrets: parseBoolean(env.PROXY_SAFETY_AUDIT_REDACT_SECRETS, true),
+    proxySafetyAuditMaxBodyChars: Math.max(0, Math.trunc(parseNumber(env.PROXY_SAFETY_AUDIT_MAX_BODY_CHARS, 65_536))),
+    proxySafetyAuditDestination: parseProxySafetyAuditDestination(env.PROXY_SAFETY_AUDIT_DESTINATION),
+    proxySafetyAuditFileDir: (env.PROXY_SAFETY_AUDIT_FILE_DIR || './logs/proxy-safety-audit').trim() || './logs/proxy-safety-audit',
+    proxySafetyAuditFileSplit: parseProxySafetyAuditFileSplit(env.PROXY_SAFETY_AUDIT_FILE_SPLIT),
     codexUpstreamWebsocketEnabled: parseBoolean(env.CODEX_UPSTREAM_WEBSOCKET_ENABLED, false),
     responsesCompactFallbackToResponsesEnabled: parseBoolean(env.RESPONSES_COMPACT_FALLBACK_TO_RESPONSES_ENABLED, false),
     disableCrossProtocolFallback: parseBoolean(env.DISABLE_CROSS_PROTOCOL_FALLBACK, false),

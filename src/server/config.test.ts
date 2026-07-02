@@ -59,6 +59,65 @@ describe('buildConfig', () => {
     }).siteApiEndpointFailureThreshold).toBe(1);
   });
 
+  it('defaults proxy safety review and audit to safe disabled defaults', () => {
+    const config = buildConfig({});
+
+    expect(config.proxySafetyReviewEnabled).toBe(false);
+    expect(config.proxySafetyRequestEnabled).toBe(true);
+    expect(config.proxySafetyResponseEnabled).toBe(true);
+    expect(config.proxySafetyBlockSecrets).toBe(true);
+    expect(config.proxySafetyBlockEnvFiles).toBe(true);
+    expect(config.proxySafetyBlockDangerousCommands).toBe(true);
+    expect(config.proxySafetyStreamWindowChars).toBe(8192);
+    expect(config.proxySafetyAuditEnabled).toBe(false);
+    expect(config.proxySafetyAuditLogRequests).toBe(true);
+    expect(config.proxySafetyAuditLogResponses).toBe(true);
+    expect(config.proxySafetyAuditLogFullBody).toBe(false);
+    expect(config.proxySafetyAuditRedactSecrets).toBe(true);
+    expect(config.proxySafetyAuditMaxBodyChars).toBe(65536);
+    expect(config.proxySafetyAuditDestination).toBe('console');
+    expect(config.proxySafetyAuditFileDir).toBe('./logs/proxy-safety-audit');
+    expect(config.proxySafetyAuditFileSplit).toBe('daily-session');
+  });
+
+  it('accepts proxy safety review and audit overrides', () => {
+    const config = buildConfig({
+      PROXY_SAFETY_REVIEW_ENABLED: 'true',
+      PROXY_SAFETY_REVIEW_REQUEST_ENABLED: 'false',
+      PROXY_SAFETY_REVIEW_RESPONSE_ENABLED: 'false',
+      PROXY_SAFETY_REVIEW_BLOCK_SECRETS: 'false',
+      PROXY_SAFETY_REVIEW_BLOCK_ENV_FILES: 'false',
+      PROXY_SAFETY_REVIEW_BLOCK_DANGEROUS_COMMANDS: 'false',
+      PROXY_SAFETY_REVIEW_STREAM_WINDOW_CHARS: '4096',
+      PROXY_SAFETY_AUDIT_ENABLED: 'true',
+      PROXY_SAFETY_AUDIT_LOG_REQUESTS: 'false',
+      PROXY_SAFETY_AUDIT_LOG_RESPONSES: 'false',
+      PROXY_SAFETY_AUDIT_LOG_FULL_BODY: 'true',
+      PROXY_SAFETY_AUDIT_REDACT_SECRETS: 'false',
+      PROXY_SAFETY_AUDIT_MAX_BODY_CHARS: '0',
+      PROXY_SAFETY_AUDIT_DESTINATION: 'file',
+      PROXY_SAFETY_AUDIT_FILE_DIR: './tmp/safety-audit',
+      PROXY_SAFETY_AUDIT_FILE_SPLIT: 'daily-session',
+    });
+
+    expect(config.proxySafetyReviewEnabled).toBe(true);
+    expect(config.proxySafetyRequestEnabled).toBe(false);
+    expect(config.proxySafetyResponseEnabled).toBe(false);
+    expect(config.proxySafetyBlockSecrets).toBe(false);
+    expect(config.proxySafetyBlockEnvFiles).toBe(false);
+    expect(config.proxySafetyBlockDangerousCommands).toBe(false);
+    expect(config.proxySafetyStreamWindowChars).toBe(4096);
+    expect(config.proxySafetyAuditEnabled).toBe(true);
+    expect(config.proxySafetyAuditLogRequests).toBe(false);
+    expect(config.proxySafetyAuditLogResponses).toBe(false);
+    expect(config.proxySafetyAuditLogFullBody).toBe(true);
+    expect(config.proxySafetyAuditRedactSecrets).toBe(false);
+    expect(config.proxySafetyAuditMaxBodyChars).toBe(0);
+    expect(config.proxySafetyAuditDestination).toBe('file');
+    expect(config.proxySafetyAuditFileDir).toBe('./tmp/safety-audit');
+    expect(config.proxySafetyAuditFileSplit).toBe('daily-session');
+  });
+
   it('accepts telegram message thread id from environment', () => {
     const config = buildConfig({
       TELEGRAM_MESSAGE_THREAD_ID: '77',

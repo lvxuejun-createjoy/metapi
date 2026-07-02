@@ -102,6 +102,14 @@ import {
   canRetryChannelSelection,
   getTesterForcedChannelId,
 } from '../channelSelection.js';
+import {
+  createSurfaceSafetyStreamGuard,
+  ProxySafetyBlockedError,
+  reviewSurfaceRequestPayload,
+  reviewSurfaceResponseText,
+  sendSafetyBlockedReply,
+  writeSafetyBlockedSse,
+} from '../safety/surface.js';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object';
@@ -643,6 +651,15 @@ export async function handleOpenAiResponsesSurfaceRequest(
             runtime: endpointRequest.runtime,
           };
         };
+        const buildReviewedEndpointRequest = (endpoint: UpstreamEndpoint) => {
+          const endpointRequest = buildEndpointRequest(endpoint);
+          reviewSurfaceRequestPayload(endpointRequest.body, {
+            model: modelName,
+            channelId: selected.channel.id,
+            sessionId: clientContext.sessionId || null,
+          });
+          return endpointRequest;
+        };
         const baseDispatchRequest = createSurfaceDispatchRequest({
           site: selected.site,
           siteUrl: siteApiBaseUrl,
@@ -678,7 +695,7 @@ export async function handleOpenAiResponsesSurfaceRequest(
               ctx,
               selected,
               siteUrl: siteApiBaseUrl,
-              buildRequest: (endpoint) => buildEndpointRequest(endpoint),
+              buildRequest: (endpoint) => buildReviewedEndpointRequest(endpoint),
               dispatchRequest,
             });
             if (recovered?.upstream?.ok) {
@@ -774,7 +791,7 @@ export async function handleOpenAiResponsesSurfaceRequest(
           disableCrossProtocolFallback: isCompactRequest || config.disableCrossProtocolFallback,
           firstByteTimeoutMs: Math.max(0, Math.trunc((config.proxyFirstByteTimeoutSec || 0) * 1000)),
           endpointCandidates,
-          buildRequest: (endpoint) => buildEndpointRequest(endpoint),
+          buildRequest: (endpoint) => buildReviewedEndpointRequest(endpoint),
           dispatchRequest,
           tryRecover,
           shouldAbortRemainingEndpoints: (ctx) => shouldAbortSameSiteEndpointFallback(
@@ -973,8 +990,42 @@ export async function handleOpenAiResponsesSurfaceRequest(
             promptTokensIncludeCache: null,
           };
           let upstreamUsagePresent = false;
+          const safetyStreamGuard = createSurfaceSafetyStreamGuard({
+            model: modelName,
+            channelId: selected.channel.id,
+            sessionId: clientContext.sessionId || null,
+          });
+          const reviewStreamChunk = (chunk: string | Uint8Array) => {
+            const chunkText = typeof chunk === 'string'
+              ? chunk
+              : new TextDecoder().decode(chunk);
+            safetyStreamGuard.reviewChunk(chunkText);
+          };
           const writeLines = (lines: string[]) => {
+            for (const line of lines) reviewStreamChunk(line);
             for (const line of lines) reply.raw.write(line);
+          };
+          const safeStreamWriter = {
+            write(chunk: string | Uint8Array) {
+              reviewStreamChunk(chunk);
+              return reply.raw.write(chunk);
+            },
+            end() {
+              return reply.raw.end();
+            },
+          };
+          const handleBlockedStreamSafety = async () => {
+            const safetyError = safetyStreamGuard.getBlockedError();
+            if (!safetyError) return false;
+            await finalizeDebugFailure(403, safetyError.payload, successfulUpstreamPath);
+            if (!reply.raw.headersSent) {
+              return sendSafetyBlockedReply(reply, safetyError);
+            }
+            if (!reply.raw.writableEnded) {
+              writeSafetyBlockedSse(reply, safetyError);
+              reply.raw.end();
+            }
+            return true;
           };
           const websocketTransportRequest = isResponsesWebsocketTransportRequest(request.headers as Record<string, unknown>);
           const streamSession = openAiResponsesTransformer.proxyStream.createSession({
@@ -992,6 +1043,7 @@ export async function handleOpenAiResponsesSurfaceRequest(
             },
             writeLines,
             writeRaw: (chunk) => {
+              reviewStreamChunk(chunk);
               reply.raw.write(chunk);
             },
           });
@@ -1001,10 +1053,11 @@ export async function handleOpenAiResponsesSurfaceRequest(
               startSseResponse();
               const streamResult = await streamSession.run(
                 createSingleChunkStreamReader(rawText),
-                reply.raw,
+                safeStreamWriter,
               );
               const latency = Date.now() - startTime;
 	              if (streamResult.status === 'failed') {
+                if (await handleBlockedStreamSafety()) return;
               await failureToolkit.recordStreamFailure({
 	                  selected,
 	                  requestedModel,
@@ -1032,6 +1085,7 @@ export async function handleOpenAiResponsesSurfaceRequest(
                   debugTrace?.options.captureStreamChunks ? rawText : { stream: true, usage: parsedUsage },
                   upstreamUsagePresent,
                 );
+                safetyStreamGuard.flushAllowed();
 	              bindSurfaceStickyChannel({
 	                stickySessionKey,
 	                selected,
@@ -1086,8 +1140,9 @@ export async function handleOpenAiResponsesSurfaceRequest(
             }
 
             startSseResponse();
-            const streamResult = streamSession.consumeUpstreamFinalPayload(upstreamData, rawText, reply.raw);
+            const streamResult = streamSession.consumeUpstreamFinalPayload(upstreamData, rawText, safeStreamWriter);
 	            if (streamResult.status === 'failed') {
+              if (await handleBlockedStreamSafety()) return;
               await failureToolkit.recordStreamFailure({
 	                selected,
 	                requestedModel,
@@ -1116,6 +1171,7 @@ export async function handleOpenAiResponsesSurfaceRequest(
                 debugTrace?.options.captureStreamChunks ? rawText : upstreamData,
                 upstreamUsagePresent,
               );
+              safetyStreamGuard.flushAllowed();
 	            bindSurfaceStickyChannel({
 	              stickySessionKey,
 	              selected,
@@ -1169,10 +1225,11 @@ export async function handleOpenAiResponsesSurfaceRequest(
 
               const streamResult = await streamSession.run(
                 createSingleChunkStreamReader(rawText),
-                reply.raw,
+                safeStreamWriter,
               );
               const latency = Date.now() - startTime;
               if (streamResult.status === 'failed') {
+                if (await handleBlockedStreamSafety()) return;
                 await failureToolkit.recordStreamFailure({
                   selected,
                   requestedModel,
@@ -1201,6 +1258,7 @@ export async function handleOpenAiResponsesSurfaceRequest(
                 debugTrace?.options.captureStreamChunks ? rawText : { stream: true, usage: parsedUsage },
                 upstreamUsagePresent,
               );
+              safetyStreamGuard.flushAllowed();
               return;
             }
 
@@ -1230,11 +1288,12 @@ export async function handleOpenAiResponsesSurfaceRequest(
               },
             }
             : baseReader;
-          const streamResult = await streamSession.run(reader, reply.raw);
+          const streamResult = await streamSession.run(reader, safeStreamWriter);
           rawText += decoder.decode();
 
           const latency = Date.now() - startTime;
 	          if (streamResult.status === 'failed') {
+              if (await handleBlockedStreamSafety()) return;
 	            await failureToolkit.recordStreamFailure({
 	              selected,
 	              requestedModel,
@@ -1268,6 +1327,7 @@ export async function handleOpenAiResponsesSurfaceRequest(
               debugTrace?.options.captureStreamChunks ? rawText : { stream: true, usage: parsedUsage },
               upstreamUsagePresent,
             );
+            safetyStreamGuard.flushAllowed();
 	          bindSurfaceStickyChannel({
 	            stickySessionKey,
 	            selected,
@@ -1351,6 +1411,11 @@ export async function handleOpenAiResponsesSurfaceRequest(
           usage: parsedUsage,
           serializationMode: isCompactRequest ? 'compact' : 'response',
         });
+        reviewSurfaceResponseText(JSON.stringify(downstreamData), {
+          model: modelName,
+          channelId: selected.channel.id,
+          sessionId: clientContext.sessionId || null,
+        });
         try {
           await recordSurfaceSuccess({
             selected,
@@ -1388,6 +1453,16 @@ export async function handleOpenAiResponsesSurfaceRequest(
 	        });
 	        return reply.send(downstreamData);
 	      } catch (err: any) {
+          if (err instanceof ProxySafetyBlockedError || err?.name === 'ProxySafetyBlockedError') {
+            const safetyError = err as ProxySafetyBlockedError;
+            await finalizeDebugFailure(403, safetyError.payload, null);
+            if (isStream && reply.raw.headersSent && !reply.raw.writableEnded) {
+              writeSafetyBlockedSse(reply, safetyError);
+              reply.raw.end();
+              return;
+            }
+            return sendSafetyBlockedReply(reply, safetyError);
+          }
           const endpointFailureStatus = typeof err?.status === 'number' ? err.status : null;
           const isSiteApiEndpointFailure = (
             err instanceof SiteApiEndpointRequestError
