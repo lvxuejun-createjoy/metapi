@@ -752,7 +752,9 @@ export type DownstreamApiKeyTrendBucket = {
 
 export type DownstreamApiKeyTrendResponse = {
   success: boolean;
-  range: "24h" | "7d" | "all";
+  range: "24h" | "7d" | "30d" | "all" | "custom";
+  startUtc?: string | null;
+  endUtc?: string | null;
   item: {
     id: number;
     name: string;
@@ -1350,7 +1352,9 @@ export const api = {
       method: "POST",
     }),
   getDownstreamApiKeysSummary: (params?: {
-    range?: "24h" | "7d" | "all";
+    range?: "24h" | "7d" | "30d" | "all" | "custom";
+    startUtc?: string;
+    endUtc?: string;
     status?: "all" | "enabled" | "disabled";
     search?: string;
   }) => request(`/api/downstream-keys/summary${buildQueryString(params)}`),
@@ -1358,7 +1362,7 @@ export const api = {
     request(`/api/downstream-keys/${id}/overview`),
   getDownstreamApiKeyTrend: (
     id: number,
-    params?: { range?: "24h" | "7d" | "all"; timeZone?: string },
+    params?: { range?: "24h" | "7d" | "30d" | "all" | "custom"; startUtc?: string; endUtc?: string; timeZone?: string },
   ) =>
     request<DownstreamApiKeyTrendResponse>(
       `/api/downstream-keys/${id}/trend${buildQueryString(params)}`,

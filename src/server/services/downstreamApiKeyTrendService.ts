@@ -7,7 +7,7 @@ import {
   type StoredUtcDateTimeInput,
 } from './localTimeService.js';
 
-export type DownstreamKeyTrendRange = '24h' | '7d' | 'all';
+export type DownstreamKeyTrendRange = '24h' | '7d' | '30d' | 'all' | 'custom';
 
 export type DownstreamKeyTrendBucket = {
   startUtc: string | null;
@@ -56,11 +56,32 @@ export function resolveDownstreamTrendRangeSinceUtc(range: DownstreamKeyTrendRan
   const nowTs = Date.now();
   if (range === '24h') return formatUtcSqlDateTime(new Date(nowTs - 24 * 60 * 60 * 1000));
   if (range === '7d') return formatUtcSqlDateTime(new Date(nowTs - 7 * 24 * 60 * 60 * 1000));
+  if (range === '30d') return formatUtcSqlDateTime(new Date(nowTs - 30 * 24 * 60 * 60 * 1000));
   return null;
 }
 
-export function resolveDownstreamTrendBucketSeconds(range: DownstreamKeyTrendRange): number {
-  return range === 'all' ? 86400 : 3600;
+function parseTrendBoundary(raw?: string | null): Date | null {
+  if (!raw) return null;
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function formatTrendBoundarySql(raw?: string | null): string | null {
+  const parsed = parseTrendBoundary(raw);
+  return parsed ? formatUtcSqlDateTime(parsed) : null;
+}
+
+export function resolveDownstreamTrendBucketSeconds(
+  range: DownstreamKeyTrendRange,
+  window?: { startUtc?: string | null; endUtc?: string | null },
+): number {
+  if (range === 'all' || range === '30d') return 86400;
+  if (range === 'custom') {
+    const start = parseTrendBoundary(window?.startUtc);
+    const end = parseTrendBoundary(window?.endUtc);
+    if (start && end && end.getTime() - start.getTime() > 7 * 24 * 60 * 60 * 1000) return 86400;
+  }
+  return 3600;
 }
 
 export function buildBucketTsExpressionForDialect(
@@ -225,6 +246,7 @@ async function readAllRangeTrendBuckets(
   bucketSeconds: number,
   timeZone: string,
   sinceUtc: string | null,
+  untilUtc: string | null,
 ): Promise<DownstreamKeyTrendBucket[]> {
   const accumulator = new Map<string, DownstreamTrendBucketAccumulator>();
   let cursor: DownstreamTrendCursor | null = null;
@@ -233,6 +255,9 @@ async function readAllRangeTrendBuckets(
     const whereClauses: SQL[] = [eq(schema.proxyLogs.downstreamApiKeyId, downstreamApiKeyId)];
     if (sinceUtc) {
       whereClauses.push(sql`${schema.proxyLogs.createdAt} >= ${sinceUtc}`);
+    }
+    if (untilUtc) {
+      whereClauses.push(sql`${schema.proxyLogs.createdAt} <= ${untilUtc}`);
     }
     if (cursor) {
       whereClauses.push(buildTrendCursorClause(cursor));
@@ -268,16 +293,20 @@ async function readWindowedTrendBuckets(
   downstreamApiKeyId: number,
   bucketSeconds: number,
   sinceUtc: string | null,
+  untilUtc: string | null,
   timeZone: string,
 ): Promise<DownstreamKeyTrendBucket[]> {
   if (timeZone.toUpperCase() !== 'UTC') {
-    return readAllRangeTrendBuckets(downstreamApiKeyId, bucketSeconds, timeZone, sinceUtc);
+    return readAllRangeTrendBuckets(downstreamApiKeyId, bucketSeconds, timeZone, sinceUtc, untilUtc);
   }
 
   const bucketTs = resolveBucketTsExpression(bucketSeconds);
   const whereClauses: SQL[] = [eq(schema.proxyLogs.downstreamApiKeyId, downstreamApiKeyId)];
   if (sinceUtc) {
     whereClauses.push(sql`${schema.proxyLogs.createdAt} >= ${sinceUtc}`);
+  }
+  if (untilUtc) {
+    whereClauses.push(sql`${schema.proxyLogs.createdAt} <= ${untilUtc}`);
   }
 
   const rows = await db.select({
@@ -313,18 +342,26 @@ async function readWindowedTrendBuckets(
 export async function readDownstreamApiKeyTrendBuckets(input: {
   downstreamApiKeyId: number;
   range: DownstreamKeyTrendRange;
+  startUtc?: string | null;
+  endUtc?: string | null;
   timeZone?: string | null;
 }): Promise<{
   bucketSeconds: number;
   timeZone: string;
   buckets: DownstreamKeyTrendBucket[];
 }> {
-  const bucketSeconds = resolveDownstreamTrendBucketSeconds(input.range);
-  const sinceUtc = resolveDownstreamTrendRangeSinceUtc(input.range);
+  const bucketSeconds = resolveDownstreamTrendBucketSeconds(input.range, {
+    startUtc: input.startUtc,
+    endUtc: input.endUtc,
+  });
+  const sinceUtc = input.range === 'custom'
+    ? formatTrendBoundarySql(input.startUtc)
+    : resolveDownstreamTrendRangeSinceUtc(input.range);
+  const untilUtc = input.range === 'custom' ? formatTrendBoundarySql(input.endUtc) : null;
   const timeZone = resolveDownstreamTrendTimeZone(input.timeZone);
-  const buckets = input.range === 'all'
-    ? await readAllRangeTrendBuckets(input.downstreamApiKeyId, bucketSeconds, timeZone, sinceUtc)
-    : await readWindowedTrendBuckets(input.downstreamApiKeyId, bucketSeconds, sinceUtc, timeZone);
+  const buckets = input.range === 'all' || bucketSeconds >= 86400
+    ? await readAllRangeTrendBuckets(input.downstreamApiKeyId, bucketSeconds, timeZone, sinceUtc, untilUtc)
+    : await readWindowedTrendBuckets(input.downstreamApiKeyId, bucketSeconds, sinceUtc, untilUtc, timeZone);
 
   return {
     bucketSeconds,

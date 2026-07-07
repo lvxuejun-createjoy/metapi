@@ -1,6 +1,6 @@
 import React from 'react';
 
-export type Range = '24h' | '7d' | 'all';
+export type Range = '24h' | '7d' | '30d' | 'all' | 'custom';
 
 export type SummaryItem = {
   id: number;
@@ -51,6 +51,7 @@ export type OverviewResponse = {
   usage: null | {
     last24h: AggregateUsage | null;
     last7d: AggregateUsage | null;
+    last30d: AggregateUsage | null;
     all: AggregateUsage | null;
   };
 };
@@ -116,6 +117,8 @@ export function resolveOverviewUsageByRange(
   if (!overview?.usage) return null;
   if (range === '24h') return overview.usage.last24h;
   if (range === '7d') return overview.usage.last7d;
+  if (range === '30d') return overview.usage.last30d;
+  if (range === 'custom') return null;
   return overview.usage.all;
 }
 
@@ -153,8 +156,14 @@ export function RangeToggle({ range, onChange }: { range: Range; onChange: (r: R
       <button type="button" onClick={() => onChange('7d')} style={{ ...base, ...(range === '7d' ? active : {}), borderRight: 'none' }}>
         7d
       </button>
-      <button type="button" onClick={() => onChange('all')} style={{ ...base, ...(range === 'all' ? active : {}), borderTopRightRadius: 'var(--radius-sm)', borderBottomRightRadius: 'var(--radius-sm)' }}>
+      <button type="button" onClick={() => onChange('30d')} style={{ ...base, ...(range === '30d' ? active : {}), borderRight: 'none' }}>
+        30天
+      </button>
+      <button type="button" onClick={() => onChange('all')} style={{ ...base, ...(range === 'all' ? active : {}), borderRight: 'none' }}>
         全部
+      </button>
+      <button type="button" onClick={() => onChange('custom')} style={{ ...base, ...(range === 'custom' ? active : {}), borderTopRightRadius: 'var(--radius-sm)', borderBottomRightRadius: 'var(--radius-sm)' }}>
+        自定义
       </button>
     </div>
   );

@@ -736,6 +736,52 @@ describe('downstream api keys routes', () => {
       ],
     });
 
+    const summary30dRes = await app.inject({
+      method: 'GET',
+      url: '/api/downstream-keys/summary?range=30d&status=enabled&search=analytics',
+    });
+
+    expect(summary30dRes.statusCode).toBe(200);
+    expect(summary30dRes.json()).toMatchObject({
+      success: true,
+      range: '30d',
+      items: [
+        {
+          id: inserted.id,
+          rangeUsage: {
+            totalRequests: 4,
+            totalTokens: 3000,
+            totalCost: 0.3,
+          },
+        },
+      ],
+    });
+
+    const customStartUtc = new Date(now - 3 * 24 * 60 * 60 * 1000).toISOString();
+    const customEndUtc = new Date(now - 24 * 60 * 60 * 1000).toISOString();
+    const customSummaryRes = await app.inject({
+      method: 'GET',
+      url: `/api/downstream-keys/summary?range=custom&startUtc=${encodeURIComponent(customStartUtc)}&endUtc=${encodeURIComponent(customEndUtc)}&status=enabled&search=analytics`,
+    });
+
+    expect(customSummaryRes.statusCode).toBe(200);
+    expect(customSummaryRes.json()).toMatchObject({
+      success: true,
+      range: 'custom',
+      startUtc: customStartUtc,
+      endUtc: customEndUtc,
+      items: [
+        {
+          id: inserted.id,
+          rangeUsage: {
+            totalRequests: 1,
+            totalTokens: 600,
+            totalCost: 0.06,
+          },
+        },
+      ],
+    });
+
     const overviewRes = await app.inject({
       method: 'GET',
       url: `/api/downstream-keys/${inserted.id}/overview`,
@@ -785,6 +831,27 @@ describe('downstream api keys routes', () => {
     expect(trendBody.buckets.some((bucket: any) => bucket.totalTokens === 1500)).toBe(true);
     expect(trendBody.buckets.some((bucket: any) => bucket.totalTokens === 600)).toBe(true);
     expect(trendBody.buckets.some((bucket: any) => bucket.totalTokens === 900)).toBe(true);
+
+    const customTrendRes = await app.inject({
+      method: 'GET',
+      url: `/api/downstream-keys/${inserted.id}/trend?range=custom&startUtc=${encodeURIComponent(customStartUtc)}&endUtc=${encodeURIComponent(customEndUtc)}`,
+    });
+
+    expect(customTrendRes.statusCode).toBe(200);
+    const customTrendBody = customTrendRes.json();
+    expect(customTrendBody).toMatchObject({
+      success: true,
+      range: 'custom',
+      startUtc: customStartUtc,
+      endUtc: customEndUtc,
+      bucketSeconds: 3600,
+    });
+    expect(customTrendBody.buckets).toHaveLength(1);
+    expect(customTrendBody.buckets[0]).toMatchObject({
+      totalRequests: 1,
+      totalTokens: 600,
+      totalCost: 0.06,
+    });
   });
 
   it('groups all-range trend buckets by local day boundaries', async () => {

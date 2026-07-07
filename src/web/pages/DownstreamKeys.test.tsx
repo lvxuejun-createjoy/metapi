@@ -309,6 +309,51 @@ describe('DownstreamKeys page', () => {
     }
   });
 
+  it('loads summary with 30d and custom range parameters', async () => {
+    let root!: WebTestRenderer;
+    try {
+      await act(async () => {
+        root = create(
+          <MemoryRouter initialEntries={['/downstream-keys']}>
+            <ToastProvider>
+              <DownstreamKeys />
+            </ToastProvider>
+          </MemoryRouter>,
+        );
+      });
+      await flushMicrotasks();
+
+      const range30d = root!.root.findAll((node) => node.type === 'button' && collectText(node) === '30天')[0];
+      await act(async () => {
+        range30d.props.onClick();
+      });
+      await flushMicrotasks();
+
+      expect(apiMock.getDownstreamApiKeysSummary).toHaveBeenLastCalledWith({ range: '30d' });
+
+      const customRange = root!.root.findAll((node) => node.type === 'button' && collectText(node) === '自定义')[0];
+      await act(async () => {
+        customRange.props.onClick();
+      });
+      await flushMicrotasks();
+
+      const [startInput, endInput] = root!.root.findAll((node) => node.type === 'input' && node.props.type === 'datetime-local');
+      await act(async () => {
+        startInput.props.onChange({ target: { value: '2026-03-01T00:00' } });
+        endInput.props.onChange({ target: { value: '2026-03-31T23:59' } });
+      });
+      await flushMicrotasks();
+
+      expect(apiMock.getDownstreamApiKeysSummary).toHaveBeenLastCalledWith({
+        range: 'custom',
+        startUtc: new Date('2026-03-01T00:00').toISOString(),
+        endUtc: new Date('2026-03-31T23:59').toISOString(),
+      });
+    } finally {
+      root?.unmount();
+    }
+  });
+
   it('filters rows locally by search and status', async () => {
     apiMock.getDownstreamApiKeysSummary.mockResolvedValue({
       success: true,

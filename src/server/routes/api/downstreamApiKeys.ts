@@ -92,7 +92,9 @@ function normalizeDownstreamKeyRange(raw: unknown): DownstreamKeyRange {
   const value = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
   if (value === '24h') return '24h';
   if (value === '7d') return '7d';
+  if (value === '30d') return '30d';
   if (value === 'all') return 'all';
+  if (value === 'custom') return 'custom';
   return '24h';
 }
 
@@ -132,6 +134,24 @@ function normalizeTagMatchMode(raw: unknown): 'any' | 'all' {
 
 function resolveRangeSinceUtc(range: DownstreamKeyRange): string | null {
   return resolveDownstreamTrendRangeSinceUtc(range);
+}
+
+function normalizeUtcDateQuery(raw: unknown): { iso: string; sql: string } | null {
+  const value = typeof raw === 'string' ? raw.trim() : '';
+  if (!value) return null;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return {
+    iso: parsed.toISOString(),
+    sql: formatUtcSqlDateTime(parsed),
+  };
+}
+
+function resolveCustomRangeQuery(query: { startUtc?: string; endUtc?: string }) {
+  return {
+    start: normalizeUtcDateQuery(query.startUtc),
+    end: normalizeUtcDateQuery(query.endUtc),
+  };
 }
 
 async function validatePolicyReferences(input: {
@@ -240,8 +260,9 @@ async function validatePolicyReferences(input: {
 }
 
 export async function downstreamApiKeysRoutes(app: FastifyInstance) {
-  app.get<{ Querystring: { range?: string; status?: string; search?: string; group?: string; tags?: string | string[]; tagMatch?: string } }>('/api/downstream-keys/summary', async (request) => {
+  app.get<{ Querystring: { range?: string; startUtc?: string; endUtc?: string; status?: string; search?: string; group?: string; tags?: string | string[]; tagMatch?: string } }>('/api/downstream-keys/summary', async (request) => {
     const range = normalizeDownstreamKeyRange(request.query?.range);
+    const customRange = resolveCustomRangeQuery(request.query || {});
     const status = normalizeDownstreamKeyStatus(request.query?.status);
     const search = normalizeSearchQuery(request.query?.search);
     const group = normalizeGroupQuery(request.query?.group);
@@ -291,11 +312,22 @@ export async function downstreamApiKeysRoutes(app: FastifyInstance) {
       .sort((a, b) => b.id - a.id);
 
     if (keys.length === 0) {
-      return { success: true, range, status, search, group, tags, tagMatch, items: [] };
+      return {
+        success: true,
+        range,
+        ...(range === 'custom' ? { startUtc: customRange.start?.iso ?? null, endUtc: customRange.end?.iso ?? null } : {}),
+        status,
+        search,
+        group,
+        tags,
+        tagMatch,
+        items: [],
+      };
     }
 
     const columnReady = await hasProxyLogDownstreamApiKeyIdColumn();
-    const sinceUtc = resolveRangeSinceUtc(range);
+    const sinceUtc = range === 'custom' ? customRange.start?.sql ?? null : resolveRangeSinceUtc(range);
+    const untilUtc = range === 'custom' ? customRange.end?.sql ?? null : null;
     const ids = keys.map((k) => k.id);
 
     const usageRows = columnReady
@@ -311,6 +343,7 @@ export async function downstreamApiKeysRoutes(app: FastifyInstance) {
         .where(and(
           inArray(schema.proxyLogs.downstreamApiKeyId, ids),
           ...(sinceUtc ? [sql`${schema.proxyLogs.createdAt} >= ${sinceUtc}`] : []),
+          ...(untilUtc ? [sql`${schema.proxyLogs.createdAt} <= ${untilUtc}`] : []),
         ))
         .groupBy(schema.proxyLogs.downstreamApiKeyId)
         .all()
@@ -339,6 +372,7 @@ export async function downstreamApiKeysRoutes(app: FastifyInstance) {
     return {
       success: true,
       range,
+      ...(range === 'custom' ? { startUtc: customRange.start?.iso ?? null, endUtc: customRange.end?.iso ?? null } : {}),
       status,
       search,
       group,
@@ -383,7 +417,7 @@ export async function downstreamApiKeysRoutes(app: FastifyInstance) {
 
     const columnReady = await hasProxyLogDownstreamApiKeyIdColumn();
     if (!columnReady) {
-      return { success: true, item, usage: { last24h: null, last7d: null, all: null } };
+      return { success: true, item, usage: { last24h: null, last7d: null, last30d: null, all: null } };
     }
 
     const readAggregate = async (range: DownstreamKeyRange) => {
@@ -415,22 +449,24 @@ export async function downstreamApiKeysRoutes(app: FastifyInstance) {
       };
     };
 
-    const [last24h, last7d, all] = await Promise.all([
+    const [last24h, last7d, last30d, all] = await Promise.all([
       readAggregate('24h'),
       readAggregate('7d'),
+      readAggregate('30d'),
       readAggregate('all'),
     ]);
 
-    return { success: true, item, usage: { last24h, last7d, all } };
+    return { success: true, item, usage: { last24h, last7d, last30d, all } };
   });
 
-  app.get<{ Params: { id: string }; Querystring: { range?: string; timeZone?: string } }>('/api/downstream-keys/:id/trend', async (request, reply) => {
+  app.get<{ Params: { id: string }; Querystring: { range?: string; startUtc?: string; endUtc?: string; timeZone?: string } }>('/api/downstream-keys/:id/trend', async (request, reply) => {
     const id = parseRouteId(request.params.id);
     if (!id) {
       return reply.code(400).send({ success: false, message: 'id 无效' });
     }
 
     const range = normalizeDownstreamKeyRange(request.query?.range);
+    const customRange = resolveCustomRangeQuery(request.query || {});
     const item = await getDownstreamApiKeyById(id);
     if (!item) {
       return reply.code(404).send({ success: false, message: 'API key 不存在' });
@@ -441,8 +477,12 @@ export async function downstreamApiKeysRoutes(app: FastifyInstance) {
       return {
         success: true,
         range,
+        ...(range === 'custom' ? { startUtc: customRange.start?.iso ?? null, endUtc: customRange.end?.iso ?? null } : {}),
         item: { id: item.id, name: item.name },
-        bucketSeconds: resolveDownstreamTrendBucketSeconds(range),
+        bucketSeconds: resolveDownstreamTrendBucketSeconds(range, {
+          startUtc: customRange.start?.iso ?? null,
+          endUtc: customRange.end?.iso ?? null,
+        }),
         timeZone: resolveDownstreamTrendTimeZone(request.query?.timeZone),
         buckets: [],
       };
@@ -451,12 +491,15 @@ export async function downstreamApiKeysRoutes(app: FastifyInstance) {
     const trend = await readDownstreamApiKeyTrendBuckets({
       downstreamApiKeyId: id,
       range,
+      startUtc: customRange.start?.iso ?? null,
+      endUtc: customRange.end?.iso ?? null,
       timeZone: request.query?.timeZone,
     });
 
     return {
       success: true,
       range,
+      ...(range === 'custom' ? { startUtc: customRange.start?.iso ?? null, endUtc: customRange.end?.iso ?? null } : {}),
       item: { id: item.id, name: item.name },
       bucketSeconds: trend.bucketSeconds,
       timeZone: trend.timeZone,

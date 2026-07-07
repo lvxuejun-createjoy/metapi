@@ -26,19 +26,46 @@ type DownstreamKeyDrawerProps = {
   onClose: () => void;
   item: SummaryItem | null;
   initialRange: Range;
+  initialCustomStartLocal?: string;
+  initialCustomEndLocal?: string;
 };
+
+function dateTimeLocalToIso(value: string): string | undefined {
+  const text = value.trim();
+  if (!text) return undefined;
+  const parsed = new Date(text);
+  return Number.isNaN(parsed.getTime()) ? undefined : parsed.toISOString();
+}
+
+function buildTrendRangeParams(range: Range, customStartLocal: string, customEndLocal: string, timeZone: string) {
+  const params: { range: Range; startUtc?: string; endUtc?: string; timeZone?: string } = { range };
+  if (range === 'custom') {
+    const startUtc = dateTimeLocalToIso(customStartLocal);
+    const endUtc = dateTimeLocalToIso(customEndLocal);
+    if (startUtc) params.startUtc = startUtc;
+    if (endUtc) params.endUtc = endUtc;
+  }
+  if ((range === 'all' || range === '30d' || range === 'custom') && timeZone) {
+    params.timeZone = timeZone;
+  }
+  return params;
+}
 
 export default function DownstreamKeyDrawer({
   open,
   onClose,
   item,
   initialRange,
+  initialCustomStartLocal = '',
+  initialCustomEndLocal = '',
 }: DownstreamKeyDrawerProps) {
   const toast = useToast();
   const presence = useAnimatedVisibility(open, 220);
   const [overview, setOverview] = useState<OverviewResponse | null>(null);
   const [overviewLoading, setOverviewLoading] = useState(false);
   const [trendRange, setTrendRange] = useState<Range>(initialRange);
+  const [customStartLocal, setCustomStartLocal] = useState(initialCustomStartLocal);
+  const [customEndLocal, setCustomEndLocal] = useState(initialCustomEndLocal);
   const [trendLoading, setTrendLoading] = useState(false);
   const [buckets, setBuckets] = useState<DownstreamKeyTrendBucket[]>([]);
   const [trendBucketSeconds, setTrendBucketSeconds] = useState<number>(initialRange === 'all' ? 86400 : 3600);
@@ -47,8 +74,10 @@ export default function DownstreamKeyDrawer({
   useEffect(() => {
     if (!open) return;
     setTrendRange(initialRange);
-    setTrendBucketSeconds(initialRange === 'all' ? 86400 : 3600);
-  }, [open, initialRange]);
+    setCustomStartLocal(initialCustomStartLocal);
+    setCustomEndLocal(initialCustomEndLocal);
+    setTrendBucketSeconds(initialRange === 'all' || initialRange === '30d' ? 86400 : 3600);
+  }, [initialCustomEndLocal, initialCustomStartLocal, open, initialRange]);
 
   useEffect(() => {
     if (!open || !item?.id) return;
@@ -76,13 +105,11 @@ export default function DownstreamKeyDrawer({
   useEffect(() => {
     if (!open || !item?.id) return;
     let cancelled = false;
-    const fallbackBucketSeconds = trendRange === 'all' ? 86400 : 3600;
+    const fallbackBucketSeconds = trendRange === 'all' || trendRange === '30d' ? 86400 : 3600;
     setBuckets([]);
     setTrendBucketSeconds(fallbackBucketSeconds);
     setTrendLoading(true);
-    const trendParams = trendRange === 'all' && viewerTimeZone
-      ? { range: trendRange, timeZone: viewerTimeZone }
-      : { range: trendRange };
+    const trendParams = buildTrendRangeParams(trendRange, customStartLocal, customEndLocal, viewerTimeZone);
     api.getDownstreamApiKeyTrend(item.id, trendParams)
       .then((res: DownstreamApiKeyTrendResponse) => {
         if (cancelled) return;
@@ -101,7 +128,7 @@ export default function DownstreamKeyDrawer({
     return () => {
       cancelled = true;
     };
-  }, [open, item?.id, trendRange, toast, viewerTimeZone]);
+  }, [customEndLocal, customStartLocal, open, item?.id, trendRange, toast, viewerTimeZone]);
 
   if (!presence.shouldRender) return null;
 
@@ -154,6 +181,25 @@ export default function DownstreamKeyDrawer({
                 <div style={{ fontSize: 12, color: 'var(--color-text-muted)', marginTop: 4 }}>按选定时间窗口查看请求、Tokens 与成本变化。</div>
               </div>
               <RangeToggle range={trendRange} onChange={setTrendRange} />
+              {trendRange === 'custom' ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <input
+                    type="datetime-local"
+                    aria-label="趋势开始时间"
+                    value={customStartLocal}
+                    onChange={(e) => setCustomStartLocal(e.target.value)}
+                    style={{ padding: '7px 10px', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)', background: 'var(--color-bg-card)', color: 'var(--color-text-primary)', fontSize: 12 }}
+                  />
+                  <span style={{ color: 'var(--color-text-muted)', fontSize: 12 }}>至</span>
+                  <input
+                    type="datetime-local"
+                    aria-label="趋势结束时间"
+                    value={customEndLocal}
+                    onChange={(e) => setCustomEndLocal(e.target.value)}
+                    style={{ padding: '7px 10px', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)', background: 'var(--color-bg-card)', color: 'var(--color-text-primary)', fontSize: 12 }}
+                  />
+                </div>
+              ) : null}
             </div>
 
             <Suspense fallback={<TrendChartFallback height={260} />}>
@@ -226,10 +272,11 @@ export default function DownstreamKeyDrawer({
               <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-text-primary)', marginBottom: 10 }}>
                 固定窗口对比
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, fontSize: 12 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: 12, fontSize: 12 }}>
                 {[
                   { label: '24h', data: overview.usage.last24h },
                   { label: '7d', data: overview.usage.last7d },
+                  { label: '30d', data: overview.usage.last30d },
                   { label: '全部', data: overview.usage.all },
                 ].map((section) => (
                   <div key={section.label} style={{ border: '1px solid var(--color-border-light)', borderRadius: 'var(--radius-sm)', padding: 12 }}>

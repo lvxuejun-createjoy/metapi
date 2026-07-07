@@ -91,6 +91,40 @@ function toDateTimeLocal(isoString: string | null | undefined): string {
   return `${yyyy}-${mm}-${dd}T${hh}:${mi}`;
 }
 
+function toDateTimeLocalFromDate(date: Date): string {
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  const dd = String(date.getDate()).padStart(2, '0');
+  const hh = String(date.getHours()).padStart(2, '0');
+  const mi = String(date.getMinutes()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}T${hh}:${mi}`;
+}
+
+function buildDefaultCustomRange() {
+  const end = new Date();
+  const start = new Date(end.getTime() - 30 * 24 * 60 * 60 * 1000);
+  return {
+    start: toDateTimeLocalFromDate(start),
+    end: toDateTimeLocalFromDate(end),
+  };
+}
+
+function dateTimeLocalToIso(value: string): string | undefined {
+  const text = value.trim();
+  if (!text) return undefined;
+  const parsed = new Date(text);
+  return Number.isNaN(parsed.getTime()) ? undefined : parsed.toISOString();
+}
+
+function buildRangeQuery(range: Range, customStartLocal: string, customEndLocal: string) {
+  if (range !== 'custom') return { range };
+  return {
+    range,
+    ...(dateTimeLocalToIso(customStartLocal) ? { startUtc: dateTimeLocalToIso(customStartLocal)! } : {}),
+    ...(dateTimeLocalToIso(customEndLocal) ? { endUtc: dateTimeLocalToIso(customEndLocal)! } : {}),
+  };
+}
+
 function isExactModelPattern(modelPattern: string): boolean {
   const normalized = modelPattern.trim();
   if (!normalized) return false;
@@ -456,6 +490,7 @@ function InlineToggle({
 export default function DownstreamKeys() {
   const toast = useToast();
   const [range, setRange] = useState<Range>('24h');
+  const [customRange, setCustomRange] = useState(() => buildDefaultCustomRange());
   const [status, setStatus] = useState<Status>('all');
   const [searchInput, setSearchInput] = useState('');
   const deferredSearch = useDeferredValue(searchInput.trim());
@@ -495,7 +530,7 @@ export default function DownstreamKeys() {
     setLoading(true);
     try {
       const [summaryRes, rawRes, routesRes] = await Promise.all([
-        api.getDownstreamApiKeysSummary({ range }),
+        api.getDownstreamApiKeysSummary(buildRangeQuery(range, customRange.start, customRange.end)),
         api.getDownstreamApiKeys(),
         api.getRoutesLite(),
       ]);
@@ -597,7 +632,7 @@ export default function DownstreamKeys() {
 
   useEffect(() => {
     void load();
-  }, [range]);
+  }, [customRange.end, customRange.start, range]);
 
   useEffect(() => {
     if (!editorOpen) return;
@@ -1044,6 +1079,25 @@ export default function DownstreamKeys() {
         </div>
         <div className="page-actions">
           <RangeToggle range={range} onChange={setRange} />
+          {range === 'custom' ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <input
+                type="datetime-local"
+                aria-label="自定义开始时间"
+                value={customRange.start}
+                onChange={(e) => setCustomRange((prev) => ({ ...prev, start: e.target.value }))}
+                style={{ padding: '7px 10px', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)', background: 'var(--color-bg-card)', color: 'var(--color-text-primary)', fontSize: 12 }}
+              />
+              <span style={{ color: 'var(--color-text-muted)', fontSize: 12 }}>至</span>
+              <input
+                type="datetime-local"
+                aria-label="自定义结束时间"
+                value={customRange.end}
+                onChange={(e) => setCustomRange((prev) => ({ ...prev, end: e.target.value }))}
+                style={{ padding: '7px 10px', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)', background: 'var(--color-bg-card)', color: 'var(--color-text-primary)', fontSize: 12 }}
+              />
+            </div>
+          ) : null}
           <button className="btn btn-ghost" style={{ border: '1px solid var(--color-border)' }} onClick={() => void load()} disabled={loading}>
             {loading ? <><span className="spinner spinner-sm" /> 刷新中...</> : '刷新'}
           </button>
@@ -1062,7 +1116,7 @@ export default function DownstreamKeys() {
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
             <span className="kpi-chip">当前范围</span>
             <span className="kpi-chip kpi-chip-success">
-              {range === '24h' ? '最近 24 小时' : range === '7d' ? '最近 7 天' : '全部历史'}
+              {range === '24h' ? '最近 24 小时' : range === '7d' ? '最近 7 天' : range === '30d' ? '最近 30 天' : range === 'custom' ? '自定义时间' : '全部历史'}
             </span>
             <span className="kpi-chip kpi-chip-warning">
               Tokens {formatCompactTokens(totals.tokens)}
@@ -1367,6 +1421,8 @@ export default function DownstreamKeys() {
         onClose={() => setDrawerOpen(false)}
         item={selectedItem}
         initialRange={range}
+        initialCustomStartLocal={customRange.start}
+        initialCustomEndLocal={customRange.end}
       />
     </div>
   );
