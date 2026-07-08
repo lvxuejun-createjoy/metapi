@@ -1237,7 +1237,14 @@ export default function DownstreamKeys() {
                   <MobileField label="额度" value={`${row.maxRequests == null ? '不限' : row.maxRequests.toLocaleString()} / ${row.maxCost == null ? '成本不限' : formatMoney(row.maxCost)}`} stacked />
                   <MobileField
                     label="用量"
-                    value={`${(row.rangeUsage?.totalRequests || 0).toLocaleString()} 请求 · ${formatCompactTokens(row.rangeUsage?.totalTokens || 0)} · 成本 ${formatMoney(row.rangeUsage?.totalCost || 0)}`}
+                    value={(
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                        <span>{(row.rangeUsage?.totalRequests || 0).toLocaleString()} 请求 · {formatCompactTokens(row.rangeUsage?.totalTokens || 0)}</span>
+                        <span style={{ color: 'var(--color-text-primary)', fontSize: 13, fontWeight: 700 }}>
+                          成本 {formatMoney(row.rangeUsage?.totalCost || 0)}
+                        </span>
+                      </span>
+                    )}
                     stacked
                   />
                   <MobileField label="最近使用" value={formatIso(row.lastUsedAt)} stacked />
@@ -1305,7 +1312,7 @@ export default function DownstreamKeys() {
                       <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
                         <div style={{ color: 'var(--color-text-primary)', fontWeight: 700 }}>{formatCompactTokens(row.rangeUsage?.totalTokens || 0)}</div>
                         <div style={{ fontSize: 12, color: 'var(--color-text-muted)', marginTop: 4 }}>{(row.rangeUsage?.totalRequests || 0).toLocaleString()} 请求</div>
-                        <div style={{ fontSize: 12, color: 'var(--color-text-muted)', marginTop: 4 }}>成本 {formatMoney(row.rangeUsage?.totalCost || 0)}</div>
+                        <div style={{ fontSize: 13, color: 'var(--color-text-primary)', fontWeight: 700, marginTop: 4 }}>成本 {formatMoney(row.rangeUsage?.totalCost || 0)}</div>
                         <div style={{ fontSize: 12, color: 'var(--color-text-muted)', marginTop: 4 }}>{row.rangeUsage?.successRate == null ? '--' : `成功率 ${row.rangeUsage.successRate}%`}</div>
                       </td>
                       <td style={{ color: 'var(--color-text-muted)' }}>{formatIso(row.lastUsedAt)}</td>
