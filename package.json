@@ -51,6 +51,7 @@
     "start:desktop": "electron dist/desktop/main.js",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx src/server/db/migrate.ts",
+    "db:migrate-runtime-data": "tsx scripts/dev/migrate-sqlite-runtime-data.ts",
     "schema:contract": "tsx scripts/dev/generate-schema-contract.ts",
     "schema:generate": "npm run db:generate && npm run schema:contract",
     "repo:drift-check": "tsx scripts/dev/repo-drift-check.ts",
