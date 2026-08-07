@@ -56,6 +56,7 @@ describe('Settings log cleanup schedule', () => {
       logCleanupCron: '15 4 * * *',
       logCleanupUsageLogsEnabled: true,
       logCleanupProgramLogsEnabled: true,
+      logCleanupAuditFilesEnabled: true,
       logCleanupRetentionDays: 14,
       routingFallbackUnitCost: 1,
       routingWeights: {},
@@ -111,6 +112,7 @@ describe('Settings log cleanup schedule', () => {
         logCleanupCron: '15 4 * * *',
         logCleanupUsageLogsEnabled: true,
         logCleanupProgramLogsEnabled: true,
+        logCleanupAuditFilesEnabled: true,
         logCleanupRetentionDays: 14,
       });
     } finally {

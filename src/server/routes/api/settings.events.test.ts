@@ -51,6 +51,7 @@ describe('settings and auth events', () => {
     config.logCleanupCron = '0 6 * * *';
     config.logCleanupUsageLogsEnabled = false;
     config.logCleanupProgramLogsEnabled = false;
+    config.logCleanupAuditFilesEnabled = false;
     config.logCleanupRetentionDays = 30;
     config.codexUpstreamWebsocketEnabled = false;
     config.proxySessionChannelConcurrencyLimit = 2;
@@ -781,6 +782,7 @@ describe('settings and auth events', () => {
         logCleanupCron: '15 4 * * *',
         logCleanupUsageLogsEnabled: true,
         logCleanupProgramLogsEnabled: true,
+        logCleanupAuditFilesEnabled: true,
         logCleanupRetentionDays: 14,
       },
     });
@@ -790,15 +792,18 @@ describe('settings and auth events', () => {
       logCleanupCron?: string;
       logCleanupUsageLogsEnabled?: boolean;
       logCleanupProgramLogsEnabled?: boolean;
+      logCleanupAuditFilesEnabled?: boolean;
       logCleanupRetentionDays?: number;
     };
     expect(updated.logCleanupCron).toBe('15 4 * * *');
     expect(updated.logCleanupUsageLogsEnabled).toBe(true);
     expect(updated.logCleanupProgramLogsEnabled).toBe(true);
+    expect(updated.logCleanupAuditFilesEnabled).toBe(true);
     expect(updated.logCleanupRetentionDays).toBe(14);
     expect(config.logCleanupCron).toBe('15 4 * * *');
     expect(config.logCleanupUsageLogsEnabled).toBe(true);
     expect(config.logCleanupProgramLogsEnabled).toBe(true);
+    expect(config.logCleanupAuditFilesEnabled).toBe(true);
     expect(config.logCleanupRetentionDays).toBe(14);
 
     const rows = await db.select().from(schema.settings).all();
@@ -806,6 +811,7 @@ describe('settings and auth events', () => {
     expect(settingsMap.get('log_cleanup_cron')).toBe(JSON.stringify('15 4 * * *'));
     expect(settingsMap.get('log_cleanup_usage_logs_enabled')).toBe(JSON.stringify(true));
     expect(settingsMap.get('log_cleanup_program_logs_enabled')).toBe(JSON.stringify(true));
+    expect(settingsMap.get('log_cleanup_audit_files_enabled')).toBe(JSON.stringify(true));
     expect(settingsMap.get('log_cleanup_retention_days')).toBe(JSON.stringify(14));
 
     const getResponse = await app.inject({
@@ -817,11 +823,13 @@ describe('settings and auth events', () => {
       logCleanupCron?: string;
       logCleanupUsageLogsEnabled?: boolean;
       logCleanupProgramLogsEnabled?: boolean;
+      logCleanupAuditFilesEnabled?: boolean;
       logCleanupRetentionDays?: number;
     };
     expect(runtime.logCleanupCron).toBe('15 4 * * *');
     expect(runtime.logCleanupUsageLogsEnabled).toBe(true);
     expect(runtime.logCleanupProgramLogsEnabled).toBe(true);
+    expect(runtime.logCleanupAuditFilesEnabled).toBe(true);
     expect(runtime.logCleanupRetentionDays).toBe(14);
   });
 

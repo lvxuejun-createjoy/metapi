@@ -139,6 +139,11 @@ export function applyRuntimeSettings(settingsMap: Map<string, string>) {
     config.logCleanupProgramLogsEnabled = logCleanupProgramLogsEnabled;
   }
 
+  const logCleanupAuditFilesEnabled = parseSettingFromMap<boolean>(settingsMap, 'log_cleanup_audit_files_enabled');
+  if (typeof logCleanupAuditFilesEnabled === 'boolean') {
+    config.logCleanupAuditFilesEnabled = logCleanupAuditFilesEnabled;
+  }
+
   const logCleanupRetentionDays = parseSettingFromMap<number>(settingsMap, 'log_cleanup_retention_days');
   if (typeof logCleanupRetentionDays === 'number' && Number.isFinite(logCleanupRetentionDays) && logCleanupRetentionDays >= 1) {
     config.logCleanupRetentionDays = normalizeLogCleanupRetentionDays(logCleanupRetentionDays);

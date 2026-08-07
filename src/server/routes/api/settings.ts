@@ -79,6 +79,7 @@ interface RuntimeSettingsBody {
   logCleanupCron?: string;
   logCleanupUsageLogsEnabled?: boolean;
   logCleanupProgramLogsEnabled?: boolean;
+  logCleanupAuditFilesEnabled?: boolean;
   logCleanupRetentionDays?: number;
   webhookUrl?: string;
   barkUrl?: string;
@@ -395,6 +396,13 @@ function applyImportedSettingToRuntime(key: string, value: unknown) {
       if (typeof value !== 'boolean') return;
       config.logCleanupConfigured = true;
       updateLogCleanupSettings({ programLogsEnabled: value });
+      stopProxyLogRetentionService();
+      return;
+    }
+    case 'log_cleanup_audit_files_enabled': {
+      if (typeof value !== 'boolean') return;
+      config.logCleanupConfigured = true;
+      updateLogCleanupSettings({ auditFilesEnabled: value });
       stopProxyLogRetentionService();
       return;
     }
@@ -735,6 +743,7 @@ function getRuntimeSettingsResponse(currentAdminIp = '') {
     logCleanupCron: config.logCleanupCron,
     logCleanupUsageLogsEnabled: config.logCleanupUsageLogsEnabled,
     logCleanupProgramLogsEnabled: config.logCleanupProgramLogsEnabled,
+    logCleanupAuditFilesEnabled: config.logCleanupAuditFilesEnabled,
     logCleanupRetentionDays: config.logCleanupRetentionDays,
     modelAvailabilityProbeEnabled: config.modelAvailabilityProbeEnabled,
     channelRecoveryProbeEnabled: config.channelRecoveryProbeEnabled,
@@ -1074,6 +1083,7 @@ export async function settingsRoutes(app: FastifyInstance) {
       body.logCleanupCron !== undefined
       || body.logCleanupUsageLogsEnabled !== undefined
       || body.logCleanupProgramLogsEnabled !== undefined
+      || body.logCleanupAuditFilesEnabled !== undefined
       || body.logCleanupRetentionDays !== undefined;
 
     if (logCleanupTouched) {
@@ -1097,6 +1107,9 @@ export async function settingsRoutes(app: FastifyInstance) {
       const nextProgramLogsEnabled = body.logCleanupProgramLogsEnabled !== undefined
         ? !!body.logCleanupProgramLogsEnabled
         : config.logCleanupProgramLogsEnabled;
+      const nextAuditFilesEnabled = body.logCleanupAuditFilesEnabled !== undefined
+        ? !!body.logCleanupAuditFilesEnabled
+        : config.logCleanupAuditFilesEnabled;
 
       if (nextLogCleanupCron !== config.logCleanupCron) {
         changedLabels.push(`日志清理 Cron（${config.logCleanupCron} -> ${nextLogCleanupCron}）`);
@@ -1107,6 +1120,9 @@ export async function settingsRoutes(app: FastifyInstance) {
       if (nextProgramLogsEnabled !== config.logCleanupProgramLogsEnabled) {
         changedLabels.push(`自动清理程序日志（${config.logCleanupProgramLogsEnabled ? '开启' : '关闭'} -> ${nextProgramLogsEnabled ? '开启' : '关闭'}）`);
       }
+      if (nextAuditFilesEnabled !== config.logCleanupAuditFilesEnabled) {
+        changedLabels.push(`自动清理请求审计文件（${config.logCleanupAuditFilesEnabled ? '开启' : '关闭'} -> ${nextAuditFilesEnabled ? '开启' : '关闭'}）`);
+      }
       if (nextLogCleanupRetentionDays !== config.logCleanupRetentionDays) {
         changedLabels.push(`日志清理保留天数（${config.logCleanupRetentionDays} -> ${nextLogCleanupRetentionDays}）`);
       }
@@ -1116,13 +1132,15 @@ export async function settingsRoutes(app: FastifyInstance) {
         cronExpr: nextLogCleanupCron,
         usageLogsEnabled: nextUsageLogsEnabled,
         programLogsEnabled: nextProgramLogsEnabled,
+        auditFilesEnabled: nextAuditFilesEnabled,
         retentionDays: nextLogCleanupRetentionDays,
       });
       stopProxyLogRetentionService();
-      upsertSetting('log_cleanup_cron', nextLogCleanupCron);
-      upsertSetting('log_cleanup_usage_logs_enabled', nextUsageLogsEnabled);
-      upsertSetting('log_cleanup_program_logs_enabled', nextProgramLogsEnabled);
-      upsertSetting('log_cleanup_retention_days', nextLogCleanupRetentionDays);
+      await upsertSetting('log_cleanup_cron', nextLogCleanupCron);
+      await upsertSetting('log_cleanup_usage_logs_enabled', nextUsageLogsEnabled);
+      await upsertSetting('log_cleanup_program_logs_enabled', nextProgramLogsEnabled);
+      await upsertSetting('log_cleanup_audit_files_enabled', nextAuditFilesEnabled);
+      await upsertSetting('log_cleanup_retention_days', nextLogCleanupRetentionDays);
     }
 
     if (body.proxyToken !== undefined) {

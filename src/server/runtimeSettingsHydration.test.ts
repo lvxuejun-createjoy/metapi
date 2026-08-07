@@ -14,6 +14,7 @@ describe('applyRuntimeSettings', () => {
     config.disableCrossProtocolFallback = false;
     config.responsesCompactFallbackToResponsesEnabled = false;
     config.channelRecoveryProbeEnabled = true;
+    config.logCleanupAuditFilesEnabled = false;
     config.webhookEnabled = true;
     config.barkEnabled = true;
     config.serverChanEnabled = true;
@@ -23,6 +24,7 @@ describe('applyRuntimeSettings', () => {
       ['disable_cross_protocol_fallback', JSON.stringify(true)],
       ['responses_compact_fallback_to_responses_enabled', JSON.stringify(true)],
       ['channel_recovery_probe_enabled', JSON.stringify(false)],
+      ['log_cleanup_audit_files_enabled', JSON.stringify(true)],
       ['webhook_enabled', JSON.stringify(false)],
       ['bark_enabled', JSON.stringify(false)],
       ['serverchan_enabled', JSON.stringify(false)],
@@ -32,6 +34,7 @@ describe('applyRuntimeSettings', () => {
     expect(config.disableCrossProtocolFallback).toBe(true);
     expect(config.responsesCompactFallbackToResponsesEnabled).toBe(true);
     expect(config.channelRecoveryProbeEnabled).toBe(false);
+    expect(config.logCleanupAuditFilesEnabled).toBe(true);
     expect(config.webhookEnabled).toBe(false);
     expect(config.barkEnabled).toBe(false);
     expect(config.serverChanEnabled).toBe(false);

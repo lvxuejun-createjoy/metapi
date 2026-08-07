@@ -125,6 +125,7 @@ const LOG_CLEANUP_SETTING_KEYS = [
   'log_cleanup_cron',
   'log_cleanup_usage_logs_enabled',
   'log_cleanup_program_logs_enabled',
+  'log_cleanup_audit_files_enabled',
   'log_cleanup_retention_days',
 ] as const;
 
@@ -183,6 +184,7 @@ try {
   if (!config.logCleanupConfigured && config.proxyLogRetentionDays > 0) {
     config.logCleanupUsageLogsEnabled = true;
     config.logCleanupProgramLogsEnabled = false;
+    config.logCleanupAuditFilesEnabled = false;
     config.logCleanupRetentionDays = normalizeLogCleanupRetentionDays(config.proxyLogRetentionDays);
   }
   await ensureProxyLogBillingDetailsColumn();

@@ -1264,7 +1264,11 @@ function isSettingValueAcceptable(key: string, value: unknown): boolean {
     return typeof value === 'string' && cron.validate(value);
   }
 
-  if (key === 'log_cleanup_usage_logs_enabled' || key === 'log_cleanup_program_logs_enabled') {
+  if (
+    key === 'log_cleanup_usage_logs_enabled'
+    || key === 'log_cleanup_program_logs_enabled'
+    || key === 'log_cleanup_audit_files_enabled'
+  ) {
     return typeof value === 'boolean';
   }
 

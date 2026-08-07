@@ -15,6 +15,7 @@ const runtimeSettingsPayloadSchema = z.object({
   smtpSecure: z.boolean().optional(),
   logCleanupUsageLogsEnabled: z.boolean().optional(),
   logCleanupProgramLogsEnabled: z.boolean().optional(),
+  logCleanupAuditFilesEnabled: z.boolean().optional(),
 }).passthrough();
 
 const systemProxyTestPayloadSchema = z.object({
@@ -117,6 +118,9 @@ function formatSettingsPayloadError(error: z.ZodError): string {
   }
   if (firstPath === 'logCleanupProgramLogsEnabled') {
     return '自动清理程序日志格式无效：需要 boolean';
+  }
+  if (firstPath === 'logCleanupAuditFilesEnabled') {
+    return '自动清理请求审计文件格式无效：需要 boolean';
   }
   return 'Invalid settings payload.';
 }

@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtempSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -13,10 +13,13 @@ describe('logCleanupService', () => {
   let config: ConfigModule['config'];
   let cleanupConfiguredLogs: CleanupModule['cleanupConfiguredLogs'];
   let dataDir = '';
+  let auditDir = '';
   let originalConfig: {
     logCleanupUsageLogsEnabled: boolean;
     logCleanupProgramLogsEnabled: boolean;
+    logCleanupAuditFilesEnabled: boolean;
     logCleanupRetentionDays: number;
+    proxySafetyAuditFileDir: string;
   };
 
   beforeAll(async () => {
@@ -34,7 +37,9 @@ describe('logCleanupService', () => {
     originalConfig = {
       logCleanupUsageLogsEnabled: config.logCleanupUsageLogsEnabled,
       logCleanupProgramLogsEnabled: config.logCleanupProgramLogsEnabled,
+      logCleanupAuditFilesEnabled: config.logCleanupAuditFilesEnabled,
       logCleanupRetentionDays: config.logCleanupRetentionDays,
+      proxySafetyAuditFileDir: config.proxySafetyAuditFileDir,
     };
   });
 
@@ -46,13 +51,18 @@ describe('logCleanupService', () => {
 
     config.logCleanupUsageLogsEnabled = false;
     config.logCleanupProgramLogsEnabled = false;
+    config.logCleanupAuditFilesEnabled = false;
     config.logCleanupRetentionDays = 30;
+    auditDir = mkdtempSync(join(dataDir, 'proxy-safety-audit-'));
+    config.proxySafetyAuditFileDir = auditDir;
   });
 
   afterAll(() => {
     config.logCleanupUsageLogsEnabled = originalConfig.logCleanupUsageLogsEnabled;
     config.logCleanupProgramLogsEnabled = originalConfig.logCleanupProgramLogsEnabled;
+    config.logCleanupAuditFilesEnabled = originalConfig.logCleanupAuditFilesEnabled;
     config.logCleanupRetentionDays = originalConfig.logCleanupRetentionDays;
+    config.proxySafetyAuditFileDir = originalConfig.proxySafetyAuditFileDir;
     delete process.env.DATA_DIR;
   });
 
@@ -152,5 +162,41 @@ describe('logCleanupService', () => {
     expect(result.totalDeleted).toBe(0);
     expect(await db.select().from(schema.proxyLogs).all()).toHaveLength(1);
     expect(await db.select().from(schema.events).all()).toHaveLength(1);
+  });
+
+  it('cleans old audit jsonl files, including daily-session subdirectories', async () => {
+    const oldFile = join(auditDir, '2026-02-01.jsonl');
+    const freshFile = join(auditDir, '2026-03-10.jsonl');
+    const unrelatedFile = join(auditDir, 'notes.txt');
+    const nestedDir = join(auditDir, '2026-02-01');
+    const nestedFile = join(nestedDir, 'session-old.jsonl');
+    mkdirSync(nestedDir, { recursive: true });
+    writeFileSync(oldFile, '{"old":true}\n', 'utf8');
+    writeFileSync(freshFile, '{"fresh":true}\n', 'utf8');
+    writeFileSync(unrelatedFile, 'keep me\n', 'utf8');
+    writeFileSync(nestedFile, '{"nested":true}\n', 'utf8');
+
+    const oldTime = new Date('2026-02-01T08:00:00Z');
+    const freshTime = new Date('2026-03-10T08:00:00Z');
+    utimesSync(oldFile, oldTime, oldTime);
+    utimesSync(freshFile, freshTime, freshTime);
+    utimesSync(unrelatedFile, oldTime, oldTime);
+    utimesSync(nestedFile, oldTime, oldTime);
+
+    const result = await cleanupConfiguredLogs({
+      usageLogsEnabled: false,
+      programLogsEnabled: false,
+      auditFilesEnabled: true,
+      retentionDays: 7,
+      nowMs: Date.parse('2026-03-12T00:00:00Z'),
+    });
+
+    expect(result.enabled).toBe(true);
+    expect(result.auditFilesDeleted).toBe(2);
+    expect(result.totalDeleted).toBe(2);
+    expect(existsSync(oldFile)).toBe(false);
+    expect(existsSync(freshFile)).toBe(true);
+    expect(existsSync(unrelatedFile)).toBe(true);
+    expect(existsSync(nestedFile)).toBe(false);
   });
 });

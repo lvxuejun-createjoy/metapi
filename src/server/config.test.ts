@@ -83,6 +83,7 @@ describe('buildConfig', () => {
     expect(config.proxySafetyAuditDestination).toBe('console');
     expect(config.proxySafetyAuditFileDir).toBe('./logs/proxy-safety-audit');
     expect(config.proxySafetyAuditFileSplit).toBe('daily-session');
+    expect(config.logCleanupAuditFilesEnabled).toBe(false);
   });
 
   it('accepts proxy safety review and audit overrides', () => {
@@ -103,6 +104,7 @@ describe('buildConfig', () => {
       PROXY_SAFETY_AUDIT_DESTINATION: 'file',
       PROXY_SAFETY_AUDIT_FILE_DIR: './tmp/safety-audit',
       PROXY_SAFETY_AUDIT_FILE_SPLIT: 'daily-session',
+      LOG_CLEANUP_AUDIT_FILES_ENABLED: 'true',
     });
 
     expect(config.proxySafetyReviewEnabled).toBe(true);
@@ -121,6 +123,7 @@ describe('buildConfig', () => {
     expect(config.proxySafetyAuditDestination).toBe('file');
     expect(config.proxySafetyAuditFileDir).toBe('./tmp/safety-audit');
     expect(config.proxySafetyAuditFileSplit).toBe('daily-session');
+    expect(config.logCleanupAuditFilesEnabled).toBe(true);
   });
 
   it('accepts telegram message thread id from environment', () => {

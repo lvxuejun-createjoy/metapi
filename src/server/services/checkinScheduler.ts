@@ -203,7 +203,7 @@ function createLogCleanupTask(cronExpr: string) {
         return;
       }
       console.log(
-        `[Scheduler] Log cleanup complete: usage=${result.usageLogsDeleted}, program=${result.programLogsDeleted}, cutoff=${result.cutoffUtc}`,
+        `[Scheduler] Log cleanup complete: usage=${result.usageLogsDeleted}, program=${result.programLogsDeleted}, audit=${result.auditFilesDeleted}, cutoff=${result.cutoffUtc}`,
       );
     } catch (err) {
       console.error('[Scheduler] Log cleanup error:', err);
@@ -233,6 +233,10 @@ export async function startScheduler() {
     'log_cleanup_program_logs_enabled',
     config.logCleanupProgramLogsEnabled,
   );
+  const activeLogCleanupAuditFilesEnabled = await resolveBooleanSetting(
+    'log_cleanup_audit_files_enabled',
+    config.logCleanupAuditFilesEnabled,
+  );
   const activeLogCleanupRetentionDays = await resolvePositiveIntegerSetting(
     'log_cleanup_retention_days',
     normalizeLogCleanupRetentionDays(config.logCleanupRetentionDays),
@@ -244,6 +248,7 @@ export async function startScheduler() {
   config.logCleanupCron = activeLogCleanupCron;
   config.logCleanupUsageLogsEnabled = activeLogCleanupUsageLogsEnabled;
   config.logCleanupProgramLogsEnabled = activeLogCleanupProgramLogsEnabled;
+  config.logCleanupAuditFilesEnabled = activeLogCleanupAuditFilesEnabled;
   config.logCleanupRetentionDays = activeLogCleanupRetentionDays;
 
   stopCheckinSchedule();
@@ -259,7 +264,7 @@ export async function startScheduler() {
   console.log(`[Scheduler] Balance refresh cron: ${activeBalanceCron}`);
   console.log(`[Scheduler] Daily summary cron: ${activeDailySummaryCron}`);
   console.log(
-    `[Scheduler] Log cleanup cron: ${activeLogCleanupCron} (configured=${config.logCleanupConfigured}, usage=${activeLogCleanupUsageLogsEnabled}, program=${activeLogCleanupProgramLogsEnabled}, retentionDays=${activeLogCleanupRetentionDays})`,
+    `[Scheduler] Log cleanup cron: ${activeLogCleanupCron} (configured=${config.logCleanupConfigured}, usage=${activeLogCleanupUsageLogsEnabled}, program=${activeLogCleanupProgramLogsEnabled}, audit=${activeLogCleanupAuditFilesEnabled}, retentionDays=${activeLogCleanupRetentionDays})`,
   );
 }
 
@@ -306,6 +311,7 @@ export function updateLogCleanupSettings(input: {
   cronExpr?: string;
   usageLogsEnabled?: boolean;
   programLogsEnabled?: boolean;
+  auditFilesEnabled?: boolean;
   retentionDays?: number;
 }) {
   const cronExpr = input.cronExpr ?? config.logCleanupCron;
@@ -316,6 +322,7 @@ export function updateLogCleanupSettings(input: {
   config.logCleanupCron = cronExpr;
   if (input.usageLogsEnabled !== undefined) config.logCleanupUsageLogsEnabled = !!input.usageLogsEnabled;
   if (input.programLogsEnabled !== undefined) config.logCleanupProgramLogsEnabled = !!input.programLogsEnabled;
+  if (input.auditFilesEnabled !== undefined) config.logCleanupAuditFilesEnabled = !!input.auditFilesEnabled;
   config.logCleanupRetentionDays = retentionDays;
 
   logCleanupTask?.stop();

@@ -83,6 +83,7 @@ function resetRuntimeConfigToInitialState(
   config.logCleanupConfigured = false;
   config.logCleanupUsageLogsEnabled = config.proxyLogRetentionDays > 0;
   config.logCleanupProgramLogsEnabled = false;
+  config.logCleanupAuditFilesEnabled = false;
   config.logCleanupRetentionDays = Math.max(1, Math.trunc(config.proxyLogRetentionDays || config.logCleanupRetentionDays || 30));
   updateCheckinCron(config.checkinCron);
   updateBalanceRefreshCron(config.balanceRefreshCron);
@@ -90,6 +91,7 @@ function resetRuntimeConfigToInitialState(
     cronExpr: config.logCleanupCron,
     usageLogsEnabled: config.logCleanupUsageLogsEnabled,
     programLogsEnabled: config.logCleanupProgramLogsEnabled,
+    auditFilesEnabled: config.logCleanupAuditFilesEnabled,
     retentionDays: config.logCleanupRetentionDays,
   });
   if (config.channelRecoveryProbeEnabled) {
