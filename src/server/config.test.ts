@@ -3,6 +3,11 @@ import { describe, expect, it } from 'vitest';
 import { buildConfig, buildFastifyOptions } from './config.js';
 
 describe('buildConfig', () => {
+  it('enables channel recovery probes by default and accepts an environment override', () => {
+    expect(buildConfig({}).channelRecoveryProbeEnabled).toBe(true);
+    expect(buildConfig({ CHANNEL_RECOVERY_PROBE_ENABLED: 'false' }).channelRecoveryProbeEnabled).toBe(false);
+  });
+
   it('defaults to external listen host for server deployments', () => {
     const config = buildConfig({});
 

@@ -4,6 +4,7 @@ const backupExportTypeSchema = z.enum(['all', 'accounts', 'preferences']);
 const migrationDialectSchema = z.enum(['sqlite', 'mysql', 'postgres']);
 
 const runtimeSettingsPayloadSchema = z.object({
+  channelRecoveryProbeEnabled: z.boolean().optional(),
   modelAvailabilityProbeEnabled: z.boolean().optional(),
   webhookEnabled: z.boolean().optional(),
   barkEnabled: z.boolean().optional(),
@@ -89,6 +90,9 @@ function formatSettingsPayloadError(error: z.ZodError): string {
   }
   if (firstPath === 'modelAvailabilityProbeEnabled') {
     return '批量测活开关格式无效：需要 boolean';
+  }
+  if (firstPath === 'channelRecoveryProbeEnabled') {
+    return '通道恢复探测开关格式无效：需要 boolean';
   }
   if (firstPath === 'barkEnabled') {
     return 'Bark 开关格式无效：需要 boolean';

@@ -6,6 +6,7 @@ import { proxyChannelCoordinator } from './proxyChannelCoordinator.js';
 import { probeRuntimeModel } from './runtimeModelProbe.js';
 import { tokenRouter } from './tokenRouter.js';
 import { isExactTokenRouteModelPattern } from '../../shared/tokenRoutePatterns.js';
+import { config } from '../config.js';
 
 type RecoveryProbeSource = 'cooldown' | 'active';
 
@@ -268,6 +269,12 @@ export async function runChannelRecoveryProbeSweep(nowMs = Date.now()): Promise<
 
 export function startChannelRecoveryProbeScheduler(intervalMs = CHANNEL_RECOVERY_SWEEP_INTERVAL_MS) {
   stopChannelRecoveryProbeScheduler();
+  if (!config.channelRecoveryProbeEnabled) {
+    return {
+      enabled: false,
+      intervalMs: 0,
+    };
+  }
   const safeIntervalMs = Math.max(10_000, Math.trunc(intervalMs || 0));
   recoveryProbeSchedulerTimer = setInterval(() => {
     void runChannelRecoveryProbeSweep().catch((error) => {

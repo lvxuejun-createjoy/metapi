@@ -20,6 +20,7 @@ describe('channelRecoveryProbeService', () => {
   let db: DbModule['db'];
   let schema: DbModule['schema'];
   let runChannelRecoveryProbeSweep: RecoveryModule['runChannelRecoveryProbeSweep'];
+  let startChannelRecoveryProbeScheduler: RecoveryModule['startChannelRecoveryProbeScheduler'];
   let resetChannelRecoveryProbeState: RecoveryModule['resetChannelRecoveryProbeState'];
   let proxyChannelCoordinator: CoordinatorModule['proxyChannelCoordinator'];
   let resetProxyChannelCoordinatorState: CoordinatorModule['resetProxyChannelCoordinatorState'];
@@ -29,6 +30,7 @@ describe('channelRecoveryProbeService', () => {
   let dataDir = '';
   let originalDataDir: string | undefined;
   let originalConcurrencyLimit = 0;
+  let originalChannelRecoveryProbeEnabled = true;
 
   beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'metapi-channel-recovery-probe-'));
@@ -45,6 +47,7 @@ describe('channelRecoveryProbeService', () => {
     db = dbModule.db;
     schema = dbModule.schema;
     runChannelRecoveryProbeSweep = recoveryModule.runChannelRecoveryProbeSweep;
+    startChannelRecoveryProbeScheduler = recoveryModule.startChannelRecoveryProbeScheduler;
     resetChannelRecoveryProbeState = recoveryModule.resetChannelRecoveryProbeState;
     proxyChannelCoordinator = coordinatorModule.proxyChannelCoordinator;
     resetProxyChannelCoordinatorState = coordinatorModule.resetProxyChannelCoordinatorState;
@@ -52,6 +55,7 @@ describe('channelRecoveryProbeService', () => {
     resetSiteRuntimeHealthState = tokenRouterModule.resetSiteRuntimeHealthState;
     config = configModule.config;
     originalConcurrencyLimit = config.proxySessionChannelConcurrencyLimit;
+    originalChannelRecoveryProbeEnabled = config.channelRecoveryProbeEnabled;
   });
 
   beforeEach(async () => {
@@ -62,6 +66,7 @@ describe('channelRecoveryProbeService', () => {
       reason: 'probe succeeded',
     });
     config.proxySessionChannelConcurrencyLimit = 1;
+    config.channelRecoveryProbeEnabled = true;
     resetChannelRecoveryProbeState();
     resetProxyChannelCoordinatorState();
     invalidateTokenRouterCache();
@@ -77,6 +82,7 @@ describe('channelRecoveryProbeService', () => {
 
   afterAll(() => {
     config.proxySessionChannelConcurrencyLimit = originalConcurrencyLimit;
+    config.channelRecoveryProbeEnabled = originalChannelRecoveryProbeEnabled;
     resetChannelRecoveryProbeState();
     resetProxyChannelCoordinatorState();
     invalidateTokenRouterCache();
@@ -86,6 +92,17 @@ describe('channelRecoveryProbeService', () => {
       delete process.env.DATA_DIR;
     } else {
       process.env.DATA_DIR = originalDataDir;
+    }
+  });
+
+  it('does not schedule recovery probes when the runtime switch is disabled', () => {
+    config.channelRecoveryProbeEnabled = false;
+    const setIntervalSpy = vi.spyOn(globalThis, 'setInterval');
+    try {
+      expect(startChannelRecoveryProbeScheduler()).toEqual({ enabled: false, intervalMs: 0 });
+      expect(setIntervalSpy).not.toHaveBeenCalled();
+    } finally {
+      setIntervalSpy.mockRestore();
     }
   });
 

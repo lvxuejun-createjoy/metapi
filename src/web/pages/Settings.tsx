@@ -68,6 +68,7 @@ type RuntimeSettings = {
   logCleanupProgramLogsEnabled: boolean;
   logCleanupRetentionDays: number;
   modelAvailabilityProbeEnabled: boolean;
+  channelRecoveryProbeEnabled: boolean;
   codexUpstreamWebsocketEnabled: boolean;
   responsesCompactFallbackToResponsesEnabled: boolean;
   disableCrossProtocolFallback: boolean;
@@ -350,6 +351,7 @@ export default function Settings() {
     logCleanupProgramLogsEnabled: false,
     logCleanupRetentionDays: 30,
     modelAvailabilityProbeEnabled: false,
+    channelRecoveryProbeEnabled: true,
     codexUpstreamWebsocketEnabled: false,
     responsesCompactFallbackToResponsesEnabled: false,
     disableCrossProtocolFallback: false,
@@ -373,6 +375,7 @@ export default function Settings() {
   const [savingToken, setSavingToken] = useState(false);
   const [savingSystemProxy, setSavingSystemProxy] = useState(false);
   const [savingModelAvailabilityProbe, setSavingModelAvailabilityProbe] = useState(false);
+  const [savingChannelRecoveryProbe, setSavingChannelRecoveryProbe] = useState(false);
   const [savingProxyTransport, setSavingProxyTransport] = useState(false);
   const [testingSystemProxy, setTestingSystemProxy] = useState(false);
   const [systemProxyTestState, setSystemProxyTestState] = useState<SystemProxyTestState>(null);
@@ -418,6 +421,7 @@ export default function Settings() {
   const modelAvailabilityProbeConfirmPresence = useAnimatedVisibility(modelAvailabilityProbeConfirmOpen, 220);
   const [modelAvailabilityProbeConfirmationInput, setModelAvailabilityProbeConfirmationInput] = useState('');
   const [savedModelAvailabilityProbeEnabled, setSavedModelAvailabilityProbeEnabled] = useState(false);
+  const [savedChannelRecoveryProbeEnabled, setSavedChannelRecoveryProbeEnabled] = useState(true);
   const [factoryResetOpen, setFactoryResetOpen] = useState(false);
   const factoryResetPresence = useAnimatedVisibility(factoryResetOpen, 220);
   const [factoryResetting, setFactoryResetting] = useState(false);
@@ -626,6 +630,17 @@ export default function Settings() {
     : savedModelAvailabilityProbeEnabled
       ? '已启用'
       : '已关闭';
+  const channelRecoveryProbeDirty = runtime.channelRecoveryProbeEnabled !== savedChannelRecoveryProbeEnabled;
+  const channelRecoveryProbeStatusTone: SettingsPillTone = channelRecoveryProbeDirty
+    ? 'warning'
+    : savedChannelRecoveryProbeEnabled
+      ? 'primary'
+      : 'neutral';
+  const channelRecoveryProbeStatusLabel = channelRecoveryProbeDirty
+    ? '待保存'
+    : savedChannelRecoveryProbeEnabled
+      ? '已启用'
+      : '已关闭';
 
   const syncPayloadRuleDraftsFromObject = (value: unknown) => {
     setPayloadRuleDrafts(normalizePayloadRulesForEditor(value));
@@ -675,6 +690,7 @@ export default function Settings() {
           ? Math.trunc(Number(runtimeInfo.logCleanupRetentionDays))
           : 30,
         modelAvailabilityProbeEnabled: !!runtimeInfo.modelAvailabilityProbeEnabled,
+        channelRecoveryProbeEnabled: runtimeInfo.channelRecoveryProbeEnabled !== false,
         codexUpstreamWebsocketEnabled: !!runtimeInfo.codexUpstreamWebsocketEnabled,
         responsesCompactFallbackToResponsesEnabled: !!runtimeInfo.responsesCompactFallbackToResponsesEnabled,
         disableCrossProtocolFallback: !!runtimeInfo.disableCrossProtocolFallback,
@@ -710,6 +726,7 @@ export default function Settings() {
         globalAllowedModels: Array.isArray(runtimeInfo.globalAllowedModels) ? runtimeInfo.globalAllowedModels : [],
       });
       setSavedModelAvailabilityProbeEnabled(!!runtimeInfo.modelAvailabilityProbeEnabled);
+      setSavedChannelRecoveryProbeEnabled(runtimeInfo.channelRecoveryProbeEnabled !== false);
       setBlockedBrands(Array.isArray(runtimeInfo.globalBlockedBrands) ? runtimeInfo.globalBlockedBrands : []);
       setAllowedModels(Array.isArray(runtimeInfo.globalAllowedModels) ? runtimeInfo.globalAllowedModels : []);
       setProxyErrorKeywordsText(
@@ -885,6 +902,29 @@ export default function Settings() {
       return;
     }
     await persistModelAvailabilityProbeSetting(false);
+  };
+
+  const saveChannelRecoveryProbeSettings = async () => {
+    if (runtime.channelRecoveryProbeEnabled === savedChannelRecoveryProbeEnabled) {
+      toast.info('通道恢复探测设置未变化');
+      return;
+    }
+    setSavingChannelRecoveryProbe(true);
+    try {
+      const res = await api.updateRuntimeSettings({
+        channelRecoveryProbeEnabled: runtime.channelRecoveryProbeEnabled,
+      });
+      const nextEnabled = typeof res?.channelRecoveryProbeEnabled === 'boolean'
+        ? res.channelRecoveryProbeEnabled
+        : runtime.channelRecoveryProbeEnabled;
+      setRuntime((prev) => ({ ...prev, channelRecoveryProbeEnabled: nextEnabled }));
+      setSavedChannelRecoveryProbeEnabled(nextEnabled);
+      toast.success(nextEnabled ? '通道恢复探测已开启' : '通道恢复探测已关闭');
+    } catch (err: any) {
+      toast.error(err?.message || '保存失败');
+    } finally {
+      setSavingChannelRecoveryProbe(false);
+    }
   };
 
   const saveProxyTransportSettings = async () => {
@@ -1869,6 +1909,41 @@ export default function Settings() {
           <div style={settingsModernActionsStyle}>
             <button onClick={saveProxyTransportSettings} disabled={savingProxyTransport} className="btn btn-primary">
               {savingProxyTransport ? <><span className="spinner spinner-sm" style={{ borderTopColor: 'white', borderColor: 'rgba(255,255,255,0.3)' }} /> 保存中...</> : '保存传输与并发'}
+            </button>
+          </div>
+        </div>
+
+        <div className="card animate-slide-up stagger-4" style={settingsModernCardStyle} data-settings-card="channel-recovery-probe">
+          <div style={settingsModernHeaderStyle}>
+            <div style={settingsModernTitleBlockStyle}>
+              <div style={settingsModernTitleStyle}>通道恢复探测</div>
+              <div style={settingsModernDescriptionStyle}>
+                默认开启。定时对冷却中或正在使用的通道发送最小化模型请求，成功后提前解除故障冷却。关闭后不会再主动发送这类恢复探测请求。
+              </div>
+            </div>
+            <div style={settingsModernPillRowStyle}>
+              <span style={getSettingsPillStyle(channelRecoveryProbeStatusTone)}>
+                {channelRecoveryProbeStatusLabel}
+              </span>
+            </div>
+          </div>
+          <label style={settingsModernToggleStyle}>
+            <div style={settingsModernToggleCopyStyle}>
+              <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-text-secondary)' }}>允许后台主动探测并恢复通道</span>
+              <span style={{ fontSize: 12, lineHeight: 1.7, color: 'var(--color-text-muted)' }}>
+                关闭不影响正常代理请求，但故障通道只能等待冷却结束或后续真实请求成功后恢复。
+              </span>
+            </div>
+            <input
+              type="checkbox"
+              checked={runtime.channelRecoveryProbeEnabled}
+              onChange={(e) => setRuntime((prev) => ({ ...prev, channelRecoveryProbeEnabled: e.target.checked }))}
+              style={{ width: 16, height: 16, marginTop: 2, flexShrink: 0 }}
+            />
+          </label>
+          <div style={settingsModernActionsStyle}>
+            <button onClick={saveChannelRecoveryProbeSettings} disabled={savingChannelRecoveryProbe} className="btn btn-primary">
+              {savingChannelRecoveryProbe ? <><span className="spinner spinner-sm" style={{ borderTopColor: 'white', borderColor: 'rgba(255,255,255,0.3)' }} /> 保存中...</> : '保存通道恢复探测设置'}
             </button>
           </div>
         </div>

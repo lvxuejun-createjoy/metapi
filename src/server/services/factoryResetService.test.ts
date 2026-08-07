@@ -74,16 +74,22 @@ describe('factoryResetService', () => {
       alreadyMarked: false,
       hadExistingSites: false,
     }));
+    const startChannelRecoveryProbeScheduler = vi.fn(() => ({ enabled: true, intervalMs: 30_000 }));
+    const stopChannelRecoveryProbeScheduler = vi.fn();
 
     await performFactoryReset({
       switchRuntimeDatabase,
       runSqliteMigrations,
       ensureDefaultSitesSeeded,
+      startChannelRecoveryProbeScheduler,
+      stopChannelRecoveryProbeScheduler,
     });
 
     expect(switchRuntimeDatabase).toHaveBeenCalledWith('postgres', 'postgres://user:pass@127.0.0.1:5432/metapi', true);
     expect(runSqliteMigrations).not.toHaveBeenCalled();
     expect(ensureDefaultSitesSeeded).toHaveBeenCalledTimes(1);
+    expect(startChannelRecoveryProbeScheduler).toHaveBeenCalledTimes(1);
+    expect(stopChannelRecoveryProbeScheduler).not.toHaveBeenCalled();
     expect(await db.select().from(schema.sites).all()).toHaveLength(0);
     expect(await db.select().from(schema.settings).all()).toEqual([
       { key: 'auth_token', value: JSON.stringify('external-reset-token') },

@@ -5,6 +5,10 @@ import { updateBalanceRefreshCron, updateCheckinCron, updateLogCleanupSettings }
 import { ensureDefaultSitesSeeded } from './defaultSiteSeedService.js';
 import { startProxyLogRetentionService } from './proxyLogRetentionService.js';
 import { invalidateSiteProxyCache } from './siteProxy.js';
+import {
+  startChannelRecoveryProbeScheduler,
+  stopChannelRecoveryProbeScheduler,
+} from './channelRecoveryProbeService.js';
 
 export const FACTORY_RESET_ADMIN_TOKEN = 'change-me-admin-token';
 
@@ -12,6 +16,8 @@ type FactoryResetDependencies = {
   switchRuntimeDatabase?: typeof switchRuntimeDatabase;
   runSqliteMigrations?: () => Promise<void> | void;
   ensureDefaultSitesSeeded?: typeof ensureDefaultSitesSeeded;
+  startChannelRecoveryProbeScheduler?: typeof startChannelRecoveryProbeScheduler;
+  stopChannelRecoveryProbeScheduler?: typeof stopChannelRecoveryProbeScheduler;
 };
 
 type PreservedInfrastructureState = {
@@ -57,7 +63,13 @@ function shouldPreserveExternalRuntime(state: PreservedInfrastructureState): boo
   return state.dbType !== 'sqlite' && !!state.dbUrl.trim();
 }
 
-function resetRuntimeConfigToInitialState(preserved: PreservedInfrastructureState) {
+function resetRuntimeConfigToInitialState(
+  preserved: PreservedInfrastructureState,
+  schedulerControls: {
+    startChannelRecoveryProbeScheduler: typeof startChannelRecoveryProbeScheduler;
+    stopChannelRecoveryProbeScheduler: typeof stopChannelRecoveryProbeScheduler;
+  },
+) {
   const baseline = buildConfig(process.env);
   Object.assign(config, baseline);
   config.authToken = preserved.authToken || baseline.authToken || FACTORY_RESET_ADMIN_TOKEN;
@@ -80,6 +92,11 @@ function resetRuntimeConfigToInitialState(preserved: PreservedInfrastructureStat
     programLogsEnabled: config.logCleanupProgramLogsEnabled,
     retentionDays: config.logCleanupRetentionDays,
   });
+  if (config.channelRecoveryProbeEnabled) {
+    schedulerControls.startChannelRecoveryProbeScheduler();
+  } else {
+    schedulerControls.stopChannelRecoveryProbeScheduler();
+  }
   startProxyLogRetentionService();
   invalidateSiteProxyCache();
 }
@@ -110,10 +127,15 @@ export async function performFactoryReset(deps: FactoryResetDependencies = {}): 
   const switchRuntimeDatabaseImpl = deps.switchRuntimeDatabase ?? switchRuntimeDatabase;
   const runSqliteMigrationsImpl = deps.runSqliteMigrations ?? runDefaultSqliteMigrations;
   const ensureDefaultSitesSeededImpl = deps.ensureDefaultSitesSeeded ?? ensureDefaultSitesSeeded;
+  const startChannelRecoveryProbeSchedulerImpl = deps.startChannelRecoveryProbeScheduler ?? startChannelRecoveryProbeScheduler;
+  const stopChannelRecoveryProbeSchedulerImpl = deps.stopChannelRecoveryProbeScheduler ?? stopChannelRecoveryProbeScheduler;
   const preserved = captureInfrastructureState();
 
   await clearAllBusinessData();
-  resetRuntimeConfigToInitialState(preserved);
+  resetRuntimeConfigToInitialState(preserved, {
+    startChannelRecoveryProbeScheduler: startChannelRecoveryProbeSchedulerImpl,
+    stopChannelRecoveryProbeScheduler: stopChannelRecoveryProbeSchedulerImpl,
+  });
   await switchRuntimeDatabaseImpl(config.dbType, config.dbUrl, config.dbSsl);
   if (config.dbType === 'sqlite') {
     await runSqliteMigrationsImpl();
